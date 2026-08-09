@@ -8,5 +8,5 @@ export function saveSession(session: AuthSession) { window.localStorage.setItem(
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } }); if (!response.ok) { const body = await response.json().catch(() => null) as { message?: string | string[] } | null; throw new Error(Array.isArray(body?.message) ? body.message.join(" ") : body?.message ?? "Request failed"); } return response.json() as Promise<T>; }
 export function login(email: string, password: string) { return request<AuthSession>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); }
 export function register(email: string, password: string, displayName: string) { return request<AuthSession>("/auth/register", { method: "POST", body: JSON.stringify({ email, password, displayName }) }); }
-export function listExercises(token: string) { return request<Exercise[]>("/exercises", {}, token); }
-export function getExercise(slug: string, token: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
+export function listExercises(token?: string) { return request<Exercise[]>("/exercises", {}, token); }
+export function getExercise(slug: string, token?: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
