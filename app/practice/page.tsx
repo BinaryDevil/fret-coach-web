@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { PracticeStudio } from "../../components/practice-studio";
 
 export const metadata = {
@@ -6,5 +7,5 @@ export const metadata = {
 };
 
 export default function PracticePage() {
-  return <PracticeStudio />;
+  return <Suspense fallback={<main>Loading your exercise…</main>}><PracticeStudio /></Suspense>;
 }

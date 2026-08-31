@@ -31,11 +31,11 @@ export function PracticeStudio() {
   const activeIndexRef = useRef(0);
   const loopRef = useRef(-1);
   const countInStartRef = useRef(0);
-  const countInFrameRef = useRef<number>();
+  const countInFrameRef = useRef<number | null>(null);
   const pitchCandidateRef = useRef<{ eventId: string; state: NoteState; since: number } | null>(null);
   const playingRef = useRef(false);
   const noteStatesRef = useRef<Record<string, NoteState>>({});
-  const frameRef = useRef<number>();
+  const frameRef = useRef<number | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -61,13 +61,14 @@ export function PracticeStudio() {
   useEffect(() => {
     const content = exercise?.score?.content;
     if (!content || exercise.score?.format !== "ALPHA_TEX") return;
+    const scoreContent = content;
     let cancelled = false;
     async function renderScore() {
       const alphaTab = await import("@coderline/alphatab");
       if (cancelled || !scoreElement.current) return;
       const api = new alphaTab.AlphaTabApi(scoreElement.current, { core: { tex: false, fontDirectory: "/font/", useWorkers: false }, display: { layoutMode: alphaTab.LayoutMode.Page, scale: 1.12 } }) as AlphaApi;
       apiRef.current = api;
-      api.tex(content);
+      api.tex(scoreContent);
     }
     void renderScore();
     return () => { cancelled = true; apiRef.current?.destroy?.(); apiRef.current = null; };
