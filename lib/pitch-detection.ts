@@ -1,15 +1,35 @@
-export type PitchReading = { frequency: number; midi: number; confidence: number };
+export type PitchReading = { frequency: number; midi: number; confidence: number; rms: number; onset: boolean };
+export type PitchMatch = { expectedMidi: number; rawMidi: number; correctedMidi: number; cents: number; octaveShift: number; inTune: boolean };
+
+const NOTE_NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+
+export function midiToFrequency(midi: number) { return 440 * (2 ** ((midi - 69) / 12)); }
 
 export function midiToNoteName(midi: number) {
-  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
   const rounded = Math.round(midi);
-  return `${names[((rounded % 12) + 12) % 12]}${Math.floor(rounded / 12) - 1}`;
+  return `${NOTE_NAMES[((rounded % 12) + 12) % 12]}${Math.floor(rounded / 12) - 1}`;
 }
 
-export function detectPitch(samples: Float32Array, sampleRate: number): PitchReading | null {
+export function pitchMatch(reading: PitchReading, expectedPitches: number[], centsTolerance = 45): PitchMatch | null {
+  if (!expectedPitches.length) return null;
+  const candidate = expectedPitches.map((expectedMidi) => {
+    const octaveShift = Math.max(-1, Math.min(1, Math.round((expectedMidi - reading.midi) / 12)));
+    const correctedMidi = reading.midi + octaveShift * 12;
+    return { expectedMidi, correctedMidi, octaveShift, cents: (correctedMidi - expectedMidi) * 100 };
+  }).sort((left, right) => Math.abs(left.cents) - Math.abs(right.cents))[0];
+  return { ...candidate, rawMidi: reading.midi, inTune: Math.abs(candidate.cents) <= centsTolerance };
+}
+
+export function medianPitch(readings: PitchReading[]): PitchReading | null {
+  if (!readings.length) return null;
+  const ordered = [...readings].sort((left, right) => left.midi - right.midi);
+  return ordered[Math.floor(ordered.length / 2)];
+}
+
+export function detectPitch(samples: Float32Array, sampleRate: number): Omit<PitchReading, "rms" | "onset"> | null {
   let energy = 0;
   for (const sample of samples) energy += sample * sample;
-  if (Math.sqrt(energy / samples.length) < 0.008) return null;
+  if (Math.sqrt(energy / samples.length) < 0.006) return null;
 
   const limit = Math.floor(samples.length / 2);
   const difference = new Float32Array(limit);
@@ -35,7 +55,6 @@ export function detectPitch(samples: Float32Array, sampleRate: number): PitchRea
     }
   }
   if (candidate < 0) return null;
-
   const before = difference[candidate - 1] ?? difference[candidate];
   const current = difference[candidate];
   const after = difference[candidate + 1] ?? current;

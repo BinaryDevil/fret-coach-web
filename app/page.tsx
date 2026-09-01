@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   const exercises = [
     ["01", "Finger independence", "Spider exercise", "8 min", "80 BPM"],
@@ -8,8 +10,8 @@ export default function Home() {
   return (
     <main className="shell">
       <nav className="topbar" aria-label="Primary navigation">
-        <a className="brand" href="#home" aria-label="FretCoach home"><span className="brand-mark">F</span><span>FretCoach</span></a>
-        <div className="nav-actions"><a href="#library">Practice library</a><a href="#progress">Progress</a><button className="avatar" aria-label="Open profile menu">JD</button></div>
+        <Link className="brand" href="/" aria-label="FretCoach home"><span className="brand-mark">F</span><span>FretCoach</span></Link>
+        <div className="nav-actions"><Link href="/library">Practice library</Link><a href="#progress">Progress</a><Link className="signIn" href="/login">Sign in</Link></div>
       </nav>
       <section className="hero" id="home">
         <div><p className="eyebrow">TODAY&apos;S PRACTICE</p><h1>Make every note<br />land with intent.</h1><p className="hero-copy">Train timing, accuracy, and confidence with a practice coach that listens while you play.</p><div className="hero-actions"><a className="primary" href="/library">Start a session <span>→</span></a><button className="text-button">How it works</button></div></div>
