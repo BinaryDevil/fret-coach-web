@@ -16,7 +16,39 @@ export function getSession(): AuthSession | null { if (typeof window === "undefi
 export function saveSession(session: AuthSession) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
 export function clearSession() { if (typeof window !== "undefined") window.localStorage.removeItem(SESSION_KEY); }
 export class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } }
-async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } }); if (!response.ok) { const body = await response.json().catch(() => null) as { message?: string | string[] } | null; throw new ApiError(Array.isArray(body?.message) ? body.message.join(" ") : body?.message ?? "Request failed", response.status); } return response.json() as Promise<T>; }
+let refreshInFlight: Promise<AuthSession | null> | null = null;
+
+async function refreshSession() {
+  const existing = getSession();
+  if (!existing?.refreshToken) return null;
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${API_BASE}/auth/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: existing.refreshToken }) })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const renewed = await response.json() as AuthSession;
+        if (!renewed.accessToken || !renewed.refreshToken) return null;
+        saveSession(renewed);
+        return renewed;
+      })
+      .catch(() => null)
+      .finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, token?: string, didRefresh = false): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
+  if (response.status === 401 && token && !didRefresh && path !== "/auth/refresh") {
+    const renewed = await refreshSession();
+    if (renewed) return request<T>(path, options, renewed.accessToken, true);
+    clearSession();
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { message?: string | string[] } | null;
+    throw new ApiError(Array.isArray(body?.message) ? body.message.join(" ") : body?.message ?? (response.status === 401 ? "Your session has expired. Please sign in again." : "Request failed"), response.status);
+  }
+  return response.json() as Promise<T>;
+}
 export function login(email: string, password: string) { return request<AuthSession>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); }
 export function register(email: string, password: string, displayName: string) { return request<AuthSession>("/auth/register", { method: "POST", body: JSON.stringify({ email, password, displayName }) }); }
 export function loginWithGoogleCredential(credential: string) { return request<AuthSession>("/auth/google", { method: "POST", body: JSON.stringify({ credential }) }); }
