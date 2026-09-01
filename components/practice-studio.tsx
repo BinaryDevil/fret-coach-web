@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, CreatePracticeAttempt, Exercise, getExercise, getSession, PracticeAttemptOutcome, savePracticeAttempt, ScoreNoteEvent } from "../lib/fretcoach-api";
 import { midiToNoteName, pitchMatch, PitchReading } from "../lib/pitch-detection";
 import { AudioInput, AudioInputHandle } from "./audio-input";
+import { HomeNavigation } from "./home-navigation";
 import styles from "./practice-studio.module.css";
 
 type AlphaApi = { tex: (value: string) => void; destroy?: () => void; scoreLoaded?: { on: (listener: () => void) => void } };
@@ -161,6 +162,25 @@ export function PracticeStudio() {
     submit(0);
   }, [activeLoop, bpm, countInBeats, events, exercise, loadExercise, range]);
 
+  const finishPass = useCallback((activeDurationMs: number) => {
+    if (!range) return;
+    const finalStates = { ...noteStatesRef.current };
+    for (let index = range.start; index < range.end; index += 1) {
+      const event = events[index];
+      if (!event.isRest && !finalStates[event.id]) finalStates[event.id] = "missing";
+    }
+    noteStatesRef.current = finalStates;
+    setNoteStates(finalStates);
+    const targets = events.slice(range.start, range.end).filter((event) => !event.isRest);
+    const count = (state: NoteState) => targets.filter((event) => finalStates[event.id] === state).length;
+    const correct = count("correct");
+    const extraNotes = count("extra-note");
+    setSummary({ accuracy: targets.length ? Math.round((correct / targets.length) * 100) : 0, correct, wrongPitch: count("wrong-pitch"), missing: count("missing") + extraNotes, extraNotes, total: targets.length });
+    saveFinalizedAttempt(finalStates, activeDurationMs);
+    playingRef.current = false;
+    setPlaying(false);
+  }, [events, range, saveFinalizedAttempt]);
+
   useEffect(() => {
     if (!range) return;
     activeIndexRef.current = range.start;
@@ -246,21 +266,7 @@ export function PracticeStudio() {
       const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
       const rawElapsed = Math.max(0, now - startRef.current);
       if (rawElapsed >= loopDuration) {
-        const finalStates = { ...noteStatesRef.current };
-        for (let index = range.start; index < range.end; index += 1) {
-          const event = events[index];
-          if (!event.isRest && !finalStates[event.id]) finalStates[event.id] = "missing";
-        }
-        noteStatesRef.current = finalStates;
-        setNoteStates(finalStates);
-        const targets = events.slice(range.start, range.end).filter((event) => !event.isRest);
-        const count = (state: NoteState) => targets.filter((event) => finalStates[event.id] === state).length;
-        const correct = count("correct");
-        const extraNotes = count("extra-note");
-        setSummary({ accuracy: targets.length ? Math.round((correct / targets.length) * 100) : 0, correct, wrongPitch: count("wrong-pitch"), missing: count("missing") + extraNotes, extraNotes, total: targets.length });
-        saveFinalizedAttempt(finalStates, rawElapsed);
-        playingRef.current = false;
-        setPlaying(false);
+        finishPass(rawElapsed);
         return;
       }
       const tick = range.startTick + (rawElapsed / millisecondsPerTick);
@@ -291,7 +297,7 @@ export function PracticeStudio() {
     };
     frameRef.current = requestAnimationFrame(step);
     return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [bpm, events, metronome, playing, range, saveFinalizedAttempt, timeline, updateStates]);
+  }, [bpm, events, finishPass, metronome, playing, range, timeline, updateStates]);
 
   const handlePitch = useCallback((reading: PitchReading) => {
     setDetectedPitch(reading);
@@ -370,21 +376,21 @@ export function PracticeStudio() {
 
   const isCountingIn = countInBeat > 0;
   const expected = activeEvent?.isRest ? "Rest" : activeEvent?.pitches.map(midiToNoteName).join(" + ") ?? "—";
-  const liveMatch = detectedPitch && activeEvent && !activeEvent.isRest ? pitchMatch(detectedPitch, activeEvent.pitches) : null;
   const feedbackLabel = activeState.replace("-", " ");
   const isSpiderExercise = slug === "chromatic-1-2-3-4";
   const title = isSpiderExercise ? "1-2-3-4 Spider Exercise" : exercise.title;
   const instructions = isSpiderExercise ? "Start at 60 BPM, and raise the tempo by 5 BPM after each clean pass." : exercise.instructions;
   const loopTitle = isSpiderExercise ? "Full loop" : activeLoop?.title ?? "Full loop";
   return <main className={styles.page}>
-    <header className={styles.header}><Link className={styles.brand} href="/library"><span>F</span>FretCoach</Link><div><b>{title}</b><small>{instructions}</small></div></header>
+    <HomeNavigation />
+    <div className={styles.practiceContext}><b>{title}</b><small>{instructions}</small></div>
     <section className={styles.scoreCard}>
-      <div className={styles.scoreLabel}><span>{exercise.score.timeSignature} · {exercise.score.totalMeasures} measures</span><span className={styles.currentNote}>{isCountingIn ? `GET READY · ${countInBeat} / ${countInBeats}` : playing ? "NOW PLAYING" : "NEXT NOTE"} · {active + 1} of {events.length}</span><span>{loopTitle} · measures {activeLoop?.startMeasure ?? 1}–{activeLoop?.endMeasure ?? exercise.score.totalMeasures}</span></div>
-      <div className={styles.feedback} aria-live="polite"><span>EXPECTED <b>{expected}</b></span><span>INPUT <b>{detectedPitch ? `${midiToNoteName(detectedPitch.midi)} · ${Math.round(detectedPitch.confidence * 100)}%` : "—"}</b></span>{liveMatch && <span>TUNING <b>{liveMatch.cents >= 0 ? "+" : ""}{Math.round(liveMatch.cents)}¢{liveMatch.octaveShift ? " · octave corrected" : ""}</b></span>}<span className={styles[`state${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`]}>● {readingStatus(detectedPitch, activeState, feedbackLabel)}</span></div>
+      <div className={styles.scoreLabel}><span>{exercise.score.timeSignature} · {exercise.score.totalMeasures} measures</span><span className={styles.currentNote}>{isCountingIn ? `GET READY · ${countInBeat} / ${countInBeats}` : playing ? "NOW PLAYING" : "NEXT NOTE"} · {active + 1} of {events.length}</span><span>{loopTitle} · one pass · measures {activeLoop?.startMeasure ?? 1}–{activeLoop?.endMeasure ?? exercise.score.totalMeasures}</span></div>
+      <div className={styles.feedback} aria-live="polite"><span>PLAY <b>{expected}</b></span><span className={styles[`state${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`]}>● {readingStatus(detectedPitch, activeState, feedbackLabel)}</span></div>
       <div ref={scoreViewElement} className={styles.scoreView}><div ref={scoreElement} className="alphaTab" />{playhead && <div aria-hidden="true" className={`${styles.playhead} ${styles[`playhead${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`] ?? ""}`} style={{ left: playhead.left, top: playhead.top, height: playhead.height }} />}</div>
     </section>
-    <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select><button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
-    {summary && <section className={styles.summary} aria-live="polite"><p>PASS COMPLETE</p><strong>{summary.accuracy}%</strong><span>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}<small className={styles.saveStatus}>{saveMessage(saveStatus)}</small></span><button onClick={reset}>Practice again</button></section>}
+    <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
+    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}</small><div><button onClick={reset}>Practice again</button><Link href="/library">Back to library</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }
@@ -421,4 +427,10 @@ function saveMessage(status: SaveStatus | null) {
   if (status === "saved") return "Saved to history";
   if (status === "unsaved") return "Couldn’t save this result";
   return "";
+}
+
+function resultAdvice(summary: PassSummary) {
+  if (summary.accuracy >= 90) return "Strong pass. Raise the tempo a little when this feels relaxed.";
+  if (summary.wrongPitch >= summary.missing) return "Slow down slightly and prioritize clean fretting before increasing tempo.";
+  return "Try another pass at this tempo and focus on landing each note with the click.";
 }

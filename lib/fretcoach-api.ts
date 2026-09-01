@@ -10,6 +10,8 @@ export type DashboardResponse = { nextPractice: DashboardExerciseCard | null; st
 export type PracticeAttemptOutcome = "CORRECT" | "WRONG_PITCH" | "MISSING" | "EXTRA_NOTE";
 export type PracticeAttemptNoteResult = { timelineEventId: string; eventIndex: number; outcome: PracticeAttemptOutcome; detectedMidi?: number; correctedMidi?: number; centsOffset?: number; octaveShift?: number; confidence?: number; timingOffsetMs?: number };
 export type CreatePracticeAttempt = { clientRunId: string; exerciseId: string; loopRegionId?: string; scoreRevision: string; bpm: number; countInBeats: 0 | 2 | 4; activeDurationMs: number; startedAt: string; noteResults: PracticeAttemptNoteResult[] };
+export type PracticeAttemptSummary = { id: string; exerciseId: string; loopRegionId?: string | null; bpm: number; activeDurationMs: number; totalTargetEvents: number; correctCount: number; wrongPitchCount: number; missingCount: number; extraNoteCount: number; accuracyPercent: number; completedAt: string; exercise?: { title: string; slug: string } | null };
+export type PracticeAttemptPage = { items: PracticeAttemptSummary[]; nextCursor: string | null };
 export function getSession(): AuthSession | null { if (typeof window === "undefined") return null; try { return JSON.parse(window.localStorage.getItem(SESSION_KEY) ?? "null") as AuthSession | null; } catch { return null; } }
 export function saveSession(session: AuthSession) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
 export function clearSession() { if (typeof window !== "undefined") window.localStorage.removeItem(SESSION_KEY); }
@@ -22,3 +24,4 @@ export function listExercises(token?: string) { return request<Exercise[]>("/exe
 export function getDashboard(token: string) { return request<DashboardResponse>("/dashboard/me", {}, token); }
 export function getExercise(slug: string, token?: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
 export function savePracticeAttempt(attempt: CreatePracticeAttempt, token: string) { return request<unknown>("/practice-attempts", { method: "POST", body: JSON.stringify(attempt) }, token); }
+export function getPracticeAttempts(token: string, limit = 20) { return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}`, {}, token); }
