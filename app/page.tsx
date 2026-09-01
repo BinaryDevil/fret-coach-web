@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { HomeNavigation } from "../components/home-navigation";
 
 export default function Home() {
   const exercises = [
@@ -9,10 +9,7 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <nav className="topbar" aria-label="Primary navigation">
-        <Link className="brand" href="/" aria-label="FretCoach home"><span className="brand-mark">F</span><span>FretCoach</span></Link>
-        <div className="nav-actions"><Link href="/library">Practice library</Link><a href="#progress">Progress</a><Link className="signIn" href="/login">Sign in</Link></div>
-      </nav>
+      <HomeNavigation />
       <section className="hero" id="home">
         <div><p className="eyebrow">TODAY&apos;S PRACTICE</p><h1>Make every note<br />land with intent.</h1><p className="hero-copy">Train timing, accuracy, and confidence with a practice coach that listens while you play.</p><div className="hero-actions"><a className="primary" href="/library">Start a session <span>→</span></a><button className="text-button">How it works</button></div></div>
         <aside className="session-card" aria-label="Next practice session"><div className="session-topline"><span className="pulse" /> READY TO PLAY</div><p className="session-type">Technique builder</p><h2>Spider exercise</h2><div className="session-meta"><span>♩ 80 BPM</span><span>8 min</span><span>Level 2</span></div><div className="string-grid" aria-hidden="true">{[0, 1, 2, 3, 4, 5].map((string) => <div className="string-row" key={string}>{[0, 1, 2, 3, 4, 5, 6].map((fret) => <i key={fret} className={fret === string + 1 ? "active-note" : ""} />)}</div>)}</div></aside>
