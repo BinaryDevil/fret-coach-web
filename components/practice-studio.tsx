@@ -204,6 +204,15 @@ export function PracticeStudio() {
       const top = Math.min(...bounds.map((item) => item.top)) - viewBounds.top;
       const bottom = Math.max(...bounds.map((item) => item.bottom)) - viewBounds.top;
       setPlayhead({ left, top, height: bottom - top });
+      if (playingRef.current) {
+        const markerTop = Math.min(...bounds.map((item) => item.top));
+        const markerBottom = Math.max(...bounds.map((item) => item.bottom));
+        const safeTop = window.innerHeight * 0.24;
+        const safeBottom = window.innerHeight * 0.76;
+        if (markerTop < safeTop || markerBottom > safeBottom) {
+          window.scrollTo({ top: Math.max(0, window.scrollY + (markerTop + markerBottom) / 2 - window.innerHeight * 0.48), behavior: "smooth" });
+        }
+      }
     };
     highlightActiveBeat();
     const observer = new MutationObserver(highlightActiveBeat);

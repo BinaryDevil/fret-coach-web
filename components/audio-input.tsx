@@ -15,6 +15,7 @@ export const AudioInput = forwardRef<AudioInputHandle, AudioInputProps>(function
   const lastAnalysisRef = useRef(0);
   const lastRmsRef = useRef(0);
   const readingsRef = useRef<PitchReading[]>([]);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [state, setState] = useState<AudioState>("idle");
   const [level, setLevel] = useState(0);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -22,6 +23,7 @@ export const AudioInput = forwardRef<AudioInputHandle, AudioInputProps>(function
   const [isExpanded, setIsExpanded] = useState(false);
   const [pitch, setPitch] = useState<PitchReading | null>(null);
   const [checkingInput, setCheckingInput] = useState(false);
+  const [isPageScrolling, setIsPageScrolling] = useState(false);
   const [message, setMessage] = useState("Connect a guitar interface or microphone to monitor its input level.");
 
   const stop = useCallback(() => {
@@ -118,11 +120,20 @@ export const AudioInput = forwardRef<AudioInputHandle, AudioInputProps>(function
   }, [deviceId, loadDevices, onPitchDetected]);
 
   useEffect(() => () => stop(), [stop]);
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsPageScrolling(true);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => setIsPageScrolling(false), 180);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => { window.removeEventListener("scroll", handleScroll); if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
+  }, []);
   useImperativeHandle(ref, () => ({ start: () => connect(), stop }), [connect, stop]);
   const isConnected = state === "connected";
   const status = state === "connecting" ? "Connecting" : isConnected ? "Live" : "Off";
   const targetMatch = pitch && targetMidi !== null && targetMidi !== undefined ? pitchMatch(pitch, [targetMidi]) : null;
-  return <section className={styles.panel} aria-label="Guitar input">
+  return <section className={`${styles.panel} ${isPageScrolling && !isExpanded ? styles.panelScrolling : ""}`} aria-label="Guitar input">
     <button className={styles.toggle} type="button" aria-expanded={isExpanded} aria-controls="guitar-input-details" onClick={() => setIsExpanded((value) => !value)}>
       <span className={styles.title}><i className={isConnected ? styles.live : ""} /> GUITAR INPUT</span>
       <span className={isConnected ? styles.statusLive : styles.status}>{status}</span>
