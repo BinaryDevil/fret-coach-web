@@ -1,0 +1,4 @@
+"use client";
+import { useState } from "react";
+import { getSession, updateScoreVisibility } from "../lib/fretcoach-api";
+export function VisibilityToggle({ id, initial }: { id: string; initial: boolean }) { const [isPublic, setIsPublic] = useState(initial); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const change = async () => { const session = getSession(); if (!session) { setError("Sign in to update visibility."); return; } setBusy(true); setError(""); try { const result = await updateScoreVisibility(id, !isPublic, session.accessToken); setIsPublic(result.isPublic); } catch { setError("Couldn’t update visibility."); } finally { setBusy(false); } }; return <span><button type="button" disabled={busy} onClick={event => { event.preventDefault(); event.stopPropagation(); void change(); }}>{busy ? "Updating…" : isPublic ? "Unpublish" : "Publish"}</button>{error && <small>{error}</small>}</span>; }

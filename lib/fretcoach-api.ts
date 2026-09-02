@@ -15,11 +15,13 @@ export type PracticeAttemptPage = { items: PracticeAttemptSummary[]; nextCursor:
 export type ScoreFormat = "GUITAR_PRO" | "MUSIC_XML" | "ALPHA_TEX";
 export type ImportedTrack = { id: string; sourceTrackId: string; trackIndex: number; name: string; instrument: string; tuning: number[]; capo?: number | null };
 export type ImportedTimeline = { version: number; defaultBpm: number; ticksPerQuarter?: number; tracks: Array<{ id: string; index: number; name: string; instrument: string; tuning: number[]; capo?: number | null }>; events: Array<ScoreNoteEvent & { trackId?: string; sourceTrackId?: string; trackIndex?: number }> };
-export type ScoreImport = { id: string; status: "UPLOAD_PENDING" | "PROCESSING" | "READY" | "FAILED"; format: ScoreFormat; originalFileName: string; parseError?: string | null; song?: { id: string; title: string; artist?: string | null }; timeline?: ImportedTimeline | null; tracks?: ImportedTrack[] };
+export type ScoreImport = { id: string; status: "UPLOAD_PENDING" | "PROCESSING" | "READY" | "FAILED"; format: ScoreFormat; originalFileName: string; parseError?: string | null; isPublic?: boolean; publishedAt?: string | null; song?: { id: string; title: string; artist?: string | null }; timeline?: ImportedTimeline | null; tracks?: ImportedTrack[] };
 export type CreateScoreImportResponse = { song: { id: string; title: string; artist?: string | null }; scoreImport: ScoreImport; upload: { uploadUrl: string; uploadMethod: "PUT"; uploadHeaders: Record<string, string>; expiresInSeconds: number } };
 export type ScoreImportSource = { id: string; format: ScoreFormat; originalFileName: string; sourceUrl: string; expiresInSeconds: number };
 export type ScoreImportListItem = ScoreImport & { createdAt: string; updatedAt: string; song: { id: string; title: string; artist?: string | null } };
 export type ScoreImportListPage = { items: ScoreImportListItem[]; nextCursor: string | null };
+export type PublicScoreListItem = ScoreImport & { id: string; status: "READY"; createdAt: string; updatedAt: string; publishedAt: string | null; song: { id: string; title: string; artist: string | null } };
+export type PublicScoreListPage = { items: PublicScoreListItem[]; nextCursor: string | null };
 export function getSession(): AuthSession | null { if (typeof window === "undefined") return null; try { return JSON.parse(window.localStorage.getItem(SESSION_KEY) ?? "null") as AuthSession | null; } catch { return null; } }
 export function saveSession(session: AuthSession) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
 export function clearSession() { if (typeof window !== "undefined") window.localStorage.removeItem(SESSION_KEY); }
@@ -70,3 +72,7 @@ export function completeScoreImport(importId: string, token: string) { return re
 export function getScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}`, {}, token); }
 export function getScoreImportSource(importId: string, token: string) { return request<ScoreImportSource>(`/score-imports/${encodeURIComponent(importId)}/source`, {}, token); }
 export function listScoreImports(token: string, limit = 30, cursor?: string | null) { return request<ScoreImportListPage>(`/score-imports?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {}, token); }
+export function listPublicScores(search: { limit?: number; cursor?: string | null; query?: string; format?: ScoreFormat } = {}) { const params = new URLSearchParams({ limit: String(search.limit ?? 30) }); if (search.cursor) params.set("cursor", search.cursor); if (search.query) params.set("query", search.query); if (search.format) params.set("format", search.format); return request<PublicScoreListPage>(`/public-scores?${params}`); }
+export function getPublicScore(id: string) { return request<ScoreImport>(`/public-scores/${encodeURIComponent(id)}`); }
+export function getPublicScoreSource(id: string, token: string) { return request<ScoreImportSource>(`/public-scores/${encodeURIComponent(id)}/source`, {}, token); }
+export function updateScoreVisibility(id: string, isPublic: boolean, token: string) { return request<{ id: string; isPublic: boolean; publishedAt: string | null }>(`/score-imports/${encodeURIComponent(id)}/visibility`, { method: "PATCH", body: JSON.stringify({ isPublic }) }, token); }
