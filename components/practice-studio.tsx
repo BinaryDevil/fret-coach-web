@@ -20,6 +20,9 @@ const TIMING_TOLERANCE_MS = 125;
 const PITCH_STABILITY_MS = 180;
 const tickToMilliseconds = (tick: number, ticksPerQuarter: number, currentBpm: number) => (tick / ticksPerQuarter) * (60_000 / currentBpm);
 
+// TODO(practice-transport): Keep the curated player aligned with the shared imported-song
+// transport when restart/measure looping and rhythm-accurate synthesized guitar preview land.
+
 export function PracticeStudio() {
   const router = useRouter();
   const search = useSearchParams();

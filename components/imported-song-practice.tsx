@@ -9,12 +9,19 @@ import styles from "./imported-song-practice.module.css";
 type State = "waiting" | "correct" | "wrong" | "missed";
 const tickMs = (tick: number, quarter: number, bpm: number) => tick / quarter * 60_000 / bpm;
 
-export function ImportedSongPractice({ timeline, track }: { timeline: ImportedTimeline; track: ImportedTrack | null }) {
+// TODO(practice-transport): Add restart-from-beginning and selected-measure loop controls.
+// The loop range must constrain both the timeline clock and active-note matching.
+// TODO(practice-transport): Add an optional synthesized guitar preview driven by the
+// selected track timeline. Its scheduling must be rhythm-accurate at the active BPM
+// and reproduce the target MIDI pitches before we expose it as a "hear it first" aid.
+
+export function ImportedSongPractice({ timeline, track, onActiveBeatChange }: { timeline: ImportedTimeline; track: ImportedTrack | null; onActiveBeatChange?: (beatIndex: number) => void }) {
   const input = useRef<AudioInputHandle>(null); const context = useRef<AudioContext | null>(null); const frame = useRef<number | null>(null); const started = useRef(0); const activeRef = useRef(0);
   const [bpm, setBpm] = useState(timeline.defaultBpm); const [playing, setPlaying] = useState(false); const [countIn, setCountIn] = useState(4); const [counting, setCounting] = useState(0); const [active, setActive] = useState(0); const [state, setState] = useState<State>("waiting"); const [reading, setReading] = useState<PitchReading | null>(null);
   const quarter = timeline.ticksPerQuarter ?? 960;
   const events = useMemo(() => timeline.events.filter(event => !track || !event.sourceTrackId && !event.trackId && event.trackIndex === undefined || event.sourceTrackId === track.sourceTrackId || event.trackId === track.id || event.trackIndex === track.trackIndex).filter(event => !event.isRest), [timeline.events, track]);
   const current = events[active];
+  useEffect(() => { onActiveBeatChange?.(active); }, [active, onActiveBeatChange]);
   const click = useCallback((accent: boolean) => { const audio = context.current; if (!audio) return; const oscillator = audio.createOscillator(); const gain = audio.createGain(); oscillator.frequency.value = accent ? 1046.5 : 784; gain.gain.setValueAtTime(.0001, audio.currentTime); gain.gain.exponentialRampToValueAtTime(accent ? .14 : .09, audio.currentTime + .006); gain.gain.exponentialRampToValueAtTime(.0001, audio.currentTime + .05); oscillator.connect(gain).connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + .06); }, []);
   const stop = useCallback(() => { if (frame.current) cancelAnimationFrame(frame.current); frame.current = null; setPlaying(false); setCounting(0); }, []);
   const begin = useCallback((at: number) => { started.current = at; activeRef.current = 0; setActive(0); setState("waiting"); setPlaying(true); }, []);
