@@ -1,3 +1,3 @@
-import { MySongsPage } from "../../components/my-songs-page";
-export const metadata = { title: "My songs | FretCoach", description: "Upload and prepare a private guitar tab." };
-export default function Page() { return <MySongsPage />; }
+import { MySongsLibrary } from "../../components/my-songs-library";
+export const metadata = { title: "My songs | FretCoach", description: "Your private guitar tabs and practice songs." };
+export default function Page() { return <MySongsLibrary />; }
