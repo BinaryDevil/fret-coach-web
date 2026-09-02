@@ -12,6 +12,12 @@ export type PracticeAttemptNoteResult = { timelineEventId: string; eventIndex: n
 export type CreatePracticeAttempt = { clientRunId: string; exerciseId: string; loopRegionId?: string; scoreRevision: string; bpm: number; countInBeats: 0 | 2 | 4; activeDurationMs: number; startedAt: string; noteResults: PracticeAttemptNoteResult[] };
 export type PracticeAttemptSummary = { id: string; exerciseId: string; loopRegionId?: string | null; bpm: number; activeDurationMs: number; totalTargetEvents: number; correctCount: number; wrongPitchCount: number; missingCount: number; extraNoteCount: number; accuracyPercent: number; completedAt: string; exercise?: { title: string; slug: string } | null };
 export type PracticeAttemptPage = { items: PracticeAttemptSummary[]; nextCursor: string | null };
+export type ScoreFormat = "GUITAR_PRO" | "MUSIC_XML" | "ALPHA_TEX";
+export type ImportedTrack = { id: string; sourceTrackId: string; trackIndex: number; name: string; instrument: string; tuning: number[]; capo?: number | null };
+export type ImportedTimeline = { version: number; defaultBpm: number; tracks: Array<{ id: string; index: number; name: string; instrument: string; tuning: number[]; capo?: number | null }>; events: ScoreNoteEvent[] };
+export type ScoreImport = { id: string; status: "UPLOAD_PENDING" | "PROCESSING" | "READY" | "FAILED"; format: ScoreFormat; originalFileName: string; parseError?: string | null; timeline?: ImportedTimeline | null; tracks?: ImportedTrack[] };
+export type CreateScoreImportResponse = { song: { id: string; title: string; artist?: string | null }; scoreImport: ScoreImport; upload: { uploadUrl: string; uploadMethod: "PUT"; uploadHeaders: Record<string, string>; expiresInSeconds: number } };
+export type ScoreImportSource = { id: string; format: ScoreFormat; originalFileName: string; sourceUrl: string; expiresInSeconds: number };
 export function getSession(): AuthSession | null { if (typeof window === "undefined") return null; try { return JSON.parse(window.localStorage.getItem(SESSION_KEY) ?? "null") as AuthSession | null; } catch { return null; } }
 export function saveSession(session: AuthSession) { window.localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
 export function clearSession() { if (typeof window !== "undefined") window.localStorage.removeItem(SESSION_KEY); }
@@ -57,3 +63,7 @@ export function getDashboard(token: string) { return request<DashboardResponse>(
 export function getExercise(slug: string, token?: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
 export function savePracticeAttempt(attempt: CreatePracticeAttempt, token: string) { return request<unknown>("/practice-attempts", { method: "POST", body: JSON.stringify(attempt) }, token); }
 export function getPracticeAttempts(token: string, limit = 20) { return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}`, {}, token); }
+export function createScoreImport(input: { title: string; artist?: string; format: ScoreFormat; fileName: string; mimeType: string; sizeBytes: number }, token: string) { return request<CreateScoreImportResponse>("/score-imports", { method: "POST", body: JSON.stringify(input) }, token); }
+export function completeScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}/complete`, { method: "POST" }, token); }
+export function getScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}`, {}, token); }
+export function getScoreImportSource(importId: string, token: string) { return request<ScoreImportSource>(`/score-imports/${encodeURIComponent(importId)}/source`, {}, token); }
