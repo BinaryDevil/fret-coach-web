@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, CreatePracticeAttempt, Exercise, getExercise, getSession, PracticeAttemptOutcome, savePracticeAttempt, ScoreNoteEvent } from "../lib/fretcoach-api";
-import { midiToNoteName, pitchMatch, PitchReading } from "../lib/pitch-detection";
+import { ApiError, CreatePracticeAttempt, Exercise, getExercise, getSession, PracticeAttemptOutcome, savePracticeAttempt } from "../lib/fretcoach-api";
+import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
+import { DEFAULT_PRACTICE_STRICTNESS, findTargetForReading, isNewNoteAttack, LastAcceptedPitch, PRACTICE_STRICTNESS, PracticeStrictnessId, ticksToMilliseconds } from "../lib/practice-evaluation";
 import { AudioInput, AudioInputHandle } from "./audio-input";
 import { HomeNavigation } from "./home-navigation";
 import styles from "./practice-studio.module.css";
@@ -15,10 +16,23 @@ type NoteState = "pending" | "correct" | "wrong-pitch" | "missing" | "extra-note
 type PassSummary = { accuracy: number; correct: number; wrongPitch: number; missing: number; extraNotes: number; total: number };
 type NoteDiagnostic = { detectedMidi: number; correctedMidi: number; centsOffset: number; octaveShift: number; confidence: number; timingOffsetMs: number };
 type SaveStatus = "saving" | "saved" | "retrying" | "unsaved" | "stale";
-
-const TIMING_TOLERANCE_MS = 125;
-const PITCH_STABILITY_MS = 180;
-const tickToMilliseconds = (tick: number, ticksPerQuarter: number, currentBpm: number) => (tick / ticksPerQuarter) * (60_000 / currentBpm);
+type PracticeTraceEntry = {
+  elapsedMs: number;
+  tick: number;
+  activeEventIndex: number;
+  detectedMidi: number;
+  detectedNote: string;
+  confidence: number;
+  rms: number;
+  onset: boolean;
+  decision: "ignored" | "no-target" | "matched";
+  targetEventIndex?: number;
+  targetEventId?: string;
+  expectedMidi?: number[];
+  centsOffset?: number;
+  octaveShift?: number;
+  result?: NoteState;
+};
 
 // TODO(practice-transport): Keep the curated player aligned with the shared imported-song
 // transport when restart/measure looping and rhythm-accurate synthesized guitar preview land.
@@ -39,10 +53,11 @@ export function PracticeStudio() {
   const loopRef = useRef(-1);
   const countInStartRef = useRef(0);
   const countInFrameRef = useRef<number | null>(null);
-  const pitchCandidateRef = useRef<{ eventId: string; state: NoteState; since: number } | null>(null);
+  const lastScoredPitchRef = useRef<LastAcceptedPitch>(null);
   const playingRef = useRef(false);
   const noteStatesRef = useRef<Record<string, NoteState>>({});
   const noteDiagnosticsRef = useRef<Record<string, NoteDiagnostic>>({});
+  const practiceTraceRef = useRef<PracticeTraceEntry[]>([]);
   const clientRunIdRef = useRef<string | null>(null);
   const attemptStartedAtMsRef = useRef<number | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -56,6 +71,7 @@ export function PracticeStudio() {
   const [playhead, setPlayhead] = useState<Playhead | null>(null);
   const [loopId, setLoopId] = useState("");
   const [countInBeats, setCountInBeats] = useState(4);
+  const [strictness, setStrictness] = useState<PracticeStrictnessId>(DEFAULT_PRACTICE_STRICTNESS.id);
   const [countInBeat, setCountInBeat] = useState(0);
   const [noteStates, setNoteStates] = useState<Record<string, NoteState>>({});
   const [detectedPitch, setDetectedPitch] = useState<PitchReading | null>(null);
@@ -95,6 +111,7 @@ export function PracticeStudio() {
   }, [exercise]);
 
   const timeline = exercise?.score?.timeline;
+  const strictnessConfig = useMemo(() => PRACTICE_STRICTNESS.find((option) => option.id === strictness) ?? DEFAULT_PRACTICE_STRICTNESS, [strictness]);
   const events = useMemo(() => timeline?.events ?? [], [timeline]);
   const activeLoop = useMemo(() => exercise?.loopRegions.find((region) => region.id === loopId) ?? exercise?.loopRegions[0], [exercise, loopId]);
   const range = useMemo(() => {
@@ -193,6 +210,15 @@ export function PracticeStudio() {
   }, [range]);
 
   useEffect(() => {
+    const saved = window.localStorage.getItem("fretcoach-practice-strictness") as PracticeStrictnessId | null;
+    if (!saved || !PRACTICE_STRICTNESS.some((option) => option.id === saved)) return;
+    const frame = requestAnimationFrame(() => setStrictness(saved));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => { window.localStorage.setItem("fretcoach-practice-strictness", strictness); }, [strictness]);
+
+  useEffect(() => {
     const score = scoreElement.current;
     const view = scoreViewElement.current;
     if (!score || !view || !events.length) return;
@@ -271,9 +297,9 @@ export function PracticeStudio() {
 
   useEffect(() => {
     if (!playing || !timeline || !range) return;
-    const millisecondsPerTick = tickToMilliseconds(1, timeline.ticksPerQuarter, bpm);
-    const loopDuration = tickToMilliseconds(range.endTick - range.startTick, timeline.ticksPerQuarter, bpm);
-    const toleranceTicks = TIMING_TOLERANCE_MS / millisecondsPerTick;
+    const millisecondsPerTick = ticksToMilliseconds(1, timeline.ticksPerQuarter, bpm);
+    const loopDuration = ticksToMilliseconds(range.endTick - range.startTick, timeline.ticksPerQuarter, bpm);
+    const toleranceTicks = strictnessConfig.timingToleranceMs / millisecondsPerTick;
     const step = () => {
       const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
       const rawElapsed = Math.max(0, now - startRef.current);
@@ -309,30 +335,42 @@ export function PracticeStudio() {
     };
     frameRef.current = requestAnimationFrame(step);
     return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [bpm, events, finishPass, metronome, playing, range, timeline, updateStates]);
+  }, [bpm, events, finishPass, metronome, playing, range, strictnessConfig.timingToleranceMs, timeline, updateStates]);
 
   const handlePitch = useCallback((reading: PitchReading) => {
     setDetectedPitch(reading);
-    if (!playingRef.current || !timeline || !range || reading.confidence < 0.65) return;
-    const activeTimelineEvent = events[activeIndexRef.current];
-    if (!activeTimelineEvent) return;
-    const targetIndex = activeTimelineEvent.isRest ? nearestScoreableEventIndex(events, range, currentTickRef.current) : activeIndexRef.current;
-    const event = events[targetIndex];
-    if (!event || event.isRest) return;
-    const millisecondsPerTick = tickToMilliseconds(1, timeline.ticksPerQuarter, bpm);
-    const toleranceTicks = TIMING_TOLERANCE_MS / millisecondsPerTick;
-    if (currentTickRef.current < activeTimelineEvent.startTick - toleranceTicks || currentTickRef.current > activeTimelineEvent.startTick + activeTimelineEvent.durationTicks + toleranceTicks) return;
-    const match = pitchMatch(reading, event.pitches);
-    if (!match) return;
-    const nextState: NoteState = activeTimelineEvent.isRest ? "extra-note" : match.inTune ? "correct" : "wrong-pitch";
-    const now = performance.now();
-    if (reading.onset) pitchCandidateRef.current = { eventId: event.id, state: nextState, since: now };
-    if (!pitchCandidateRef.current || pitchCandidateRef.current.eventId !== event.id) return;
-    if (pitchCandidateRef.current.state !== nextState) {
-      pitchCandidateRef.current = { eventId: event.id, state: nextState, since: now };
-      return;
-    }
-    if (now - pitchCandidateRef.current.since < PITCH_STABILITY_MS) return;
+    const trace: PracticeTraceEntry = {
+      elapsedMs: Math.round(elapsedRef.current),
+      tick: Math.round(currentTickRef.current),
+      activeEventIndex: activeIndexRef.current,
+      detectedMidi: Math.round(reading.midi * 100) / 100,
+      detectedNote: midiToNoteName(reading.midi),
+      confidence: Math.round(reading.confidence * 1000) / 1000,
+      rms: Math.round(reading.rms * 10000) / 10000,
+      onset: reading.onset,
+      decision: "ignored",
+    };
+    const addTrace = () => {
+      if (practiceTraceRef.current.length < 2_000) practiceTraceRef.current.push(trace);
+    };
+    if (!playingRef.current || !timeline || !range || reading.confidence < 0.65) { addTrace(); return; }
+    const millisecondsPerTick = ticksToMilliseconds(1, timeline.ticksPerQuarter, bpm);
+    const target = findTargetForReading(events, range, currentTickRef.current, millisecondsPerTick, reading, noteStatesRef.current, strictnessConfig);
+    if (!target) { trace.decision = "no-target"; addTrace(); return; }
+    const event = events[target.index];
+    const match = target.match;
+    const nextState: NoteState = match.inTune ? "correct" : "wrong-pitch";
+    trace.decision = "matched";
+    trace.targetEventIndex = target.index;
+    trace.targetEventId = event.id;
+    trace.expectedMidi = event.pitches;
+    trace.centsOffset = Math.round(match.cents);
+    trace.octaveShift = match.octaveShift;
+    trace.result = nextState;
+    addTrace();
+    const isCorrection = noteStatesRef.current[event.id] === "wrong-pitch" && match.inTune;
+    if (!isCorrection && !isNewNoteAttack(reading, event.id, lastScoredPitchRef.current)) return;
+    if (!isCorrection) lastScoredPitchRef.current = { eventId: event.id, midi: reading.midi };
     updateStates((previous) => {
       if (previous[event.id] === "correct") return previous;
       noteDiagnosticsRef.current[event.id] = {
@@ -345,7 +383,7 @@ export function PracticeStudio() {
       };
       return { ...previous, [event.id]: nextState };
     });
-  }, [bpm, events, range, timeline, updateStates]);
+  }, [bpm, events, range, strictnessConfig, timeline, updateStates]);
 
   const play = () => {
     if (playing || countInBeat) { playingRef.current = false; setPlaying(false); setCountInBeat(0); return; }
@@ -354,7 +392,7 @@ export function PracticeStudio() {
     void clockRef.current?.resume();
     void inputRef.current?.start();
     setSummary(null);
-    pitchCandidateRef.current = null;
+    lastScoredPitchRef.current = null;
     const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
     if (countInBeats) {
       countInStartRef.current = now;
@@ -367,18 +405,36 @@ export function PracticeStudio() {
   };
   const reset = useCallback(() => {
     playingRef.current = false;
-    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; pitchCandidateRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; noteDiagnosticsRef.current = {}; setSummary(null); setSaveStatus(null);
+    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null);
     if (range) { setActive(range.start); activeIndexRef.current = range.start; currentTickRef.current = range.startTick; }
     updateStates(() => ({}));
   }, [range, updateStates]);
   const updateBpm = (value: number) => {
     if (timeline && range) {
       const progressedTicks = Math.max(0, currentTickRef.current - range.startTick);
-      elapsedRef.current = tickToMilliseconds(progressedTicks, timeline.ticksPerQuarter, value);
+      elapsedRef.current = ticksToMilliseconds(progressedTicks, timeline.ticksPerQuarter, value);
       const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
       startRef.current = now - elapsedRef.current;
     }
     setBpm(value);
+  };
+  const downloadDiagnostics = () => {
+    if (!exercise || !timeline || !range) return;
+    const payload = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      exercise: { id: exercise.id, slug: exercise.slug, title: exercise.title },
+      transport: { bpm, countInBeats, strictness: strictnessConfig, ticksPerQuarter: timeline.ticksPerQuarter },
+      range: { startEventIndex: range.start, endEventIndex: range.end - 1, startTick: range.startTick, endTick: range.endTick },
+      expectedEvents: events.map((event, eventIndex) => ({ event, eventIndex })).filter(({ eventIndex, event }) => eventIndex >= range.start && eventIndex < range.end && !event.isRest).map(({ event, eventIndex }) => ({ eventIndex, id: event.id, startTick: event.startTick, durationTicks: event.durationTicks, pitches: event.pitches, measure: event.measure, beat: event.beat, state: noteStatesRef.current[event.id] ?? "missing" })),
+      readings: practiceTraceRef.current,
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `fretcoach-diagnostics-${exercise.slug}-${Date.now()}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   if (loading) return <main className={styles.state}>Loading your exercise…</main>;
@@ -401,8 +457,8 @@ export function PracticeStudio() {
       <div className={styles.feedback} aria-live="polite"><span>PLAY <b>{expected}</b></span><span className={styles[`state${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`]}>● {readingStatus(detectedPitch, activeState, feedbackLabel)}</span></div>
       <div ref={scoreViewElement} className={styles.scoreView}><div ref={scoreElement} className="alphaTab" />{playhead && <div aria-hidden="true" className={`${styles.playhead} ${styles[`playhead${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`] ?? ""}`} style={{ left: playhead.left, top: playhead.top, height: playhead.height }} />}</div>
     </section>
-    <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
-    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}</small><div><button onClick={reset}>Practice again</button><Link href="/library">Back to library</Link></div></section></div>}
+    <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Scoring strictness" value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
+    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}</small><div><button onClick={reset}>Practice again</button><button onClick={downloadDiagnostics}>Download diagnostics</button><Link href="/library">Back to library</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }
@@ -418,19 +474,6 @@ function outcomeForState(state: NoteState): PracticeAttemptOutcome {
   if (state === "wrong-pitch") return "WRONG_PITCH";
   if (state === "extra-note") return "EXTRA_NOTE";
   return "MISSING";
-}
-
-function nearestScoreableEventIndex(events: ScoreNoteEvent[], range: { start: number; end: number }, tick: number) {
-  let closestIndex = -1;
-  let closestDistance = Number.POSITIVE_INFINITY;
-  for (let index = range.start; index < range.end; index += 1) {
-    const event = events[index];
-    if (event.isRest) continue;
-    const center = event.startTick + event.durationTicks / 2;
-    const distance = Math.abs(center - tick);
-    if (distance < closestDistance) { closestIndex = index; closestDistance = distance; }
-  }
-  return closestIndex;
 }
 
 function saveMessage(status: SaveStatus | null) {
