@@ -66,7 +66,9 @@ export function listExercises(token?: string) { return request<Exercise[]>("/exe
 export function getDashboard(token: string) { return request<DashboardResponse>("/dashboard/me", {}, token); }
 export function getExercise(slug: string, token?: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
 export function savePracticeAttempt(attempt: CreatePracticeAttempt, token: string) { return request<unknown>("/practice-attempts", { method: "POST", body: JSON.stringify(attempt) }, token); }
-export function getPracticeAttempts(token: string, limit = 20) { return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}`, {}, token); }
+export function getPracticeAttempts(token: string, limit = 20, cursor?: string | null) {
+  return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {}, token);
+}
 export function createScoreImport(input: { title: string; artist?: string; format: ScoreFormat; fileName: string; mimeType: string; sizeBytes: number; isPublic?: boolean }, token: string) { return request<CreateScoreImportResponse>("/score-imports", { method: "POST", body: JSON.stringify(input) }, token); }
 export function completeScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}/complete`, { method: "POST" }, token); }
 export function getScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}`, {}, token); }

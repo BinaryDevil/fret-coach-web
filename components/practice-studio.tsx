@@ -61,6 +61,7 @@ export function PracticeStudio() {
   const clientRunIdRef = useRef<string | null>(null);
   const attemptStartedAtMsRef = useRef<number | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retrySaveRef = useRef<(() => void) | null>(null);
   const frameRef = useRef<number | null>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [error, setError] = useState("");
@@ -77,6 +78,7 @@ export function PracticeStudio() {
   const [detectedPitch, setDetectedPitch] = useState<PitchReading | null>(null);
   const [summary, setSummary] = useState<PassSummary | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
+  const [saveError, setSaveError] = useState("");
 
   const loadExercise = useCallback(() => {
     const session = getSession();
@@ -155,12 +157,15 @@ export function PracticeStudio() {
       noteResults,
     };
     const submit = (retry: number) => {
+      if (clientRunIdRef.current !== clientRunId) return;
       setSaveStatus(retry ? "retrying" : "saving");
+      setSaveError("");
       const latestSession = getSession();
-      if (!latestSession) { setSaveStatus("unsaved"); return; }
+      if (!latestSession) { setSaveStatus("unsaved"); setSaveError("Sign in again to save this pass."); return; }
       void savePracticeAttempt(payload, latestSession.accessToken)
-        .then(() => setSaveStatus("saved"))
+        .then(() => { if (clientRunIdRef.current === clientRunId) { setSaveStatus("saved"); retrySaveRef.current = null; } })
         .catch((cause) => {
+          if (clientRunIdRef.current !== clientRunId) return;
           if (cause instanceof ApiError && cause.status === 409) {
             if (clientRunIdRef.current === clientRunId) {
               noteStatesRef.current = {};
@@ -177,8 +182,10 @@ export function PracticeStudio() {
             return;
           }
           setSaveStatus("unsaved");
+          setSaveError(cause instanceof Error ? cause.message : "The server did not accept this result.");
         });
     };
+    retrySaveRef.current = () => submit(0);
     submit(0);
   }, [activeLoop, bpm, countInBeats, events, exercise, loadExercise, range]);
 
@@ -405,7 +412,8 @@ export function PracticeStudio() {
   };
   const reset = useCallback(() => {
     playingRef.current = false;
-    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null);
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; retrySaveRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null); setSaveError("");
     if (range) { setActive(range.start); activeIndexRef.current = range.start; currentTickRef.current = range.startTick; }
     updateStates(() => ({}));
   }, [range, updateStates]);
@@ -458,7 +466,7 @@ export function PracticeStudio() {
       <div ref={scoreViewElement} className={styles.scoreView}><div ref={scoreElement} className="alphaTab" />{playhead && <div aria-hidden="true" className={`${styles.playhead} ${styles[`playhead${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`] ?? ""}`} style={{ left: playhead.left, top: playhead.top, height: playhead.height }} />}</div>
     </section>
     <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Scoring strictness" value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
-    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}</small><div><button onClick={reset}>Practice again</button><button onClick={downloadDiagnostics}>Download diagnostics</button><Link href="/library">Back to library</Link></div></section></div>}
+    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small><div><button onClick={reset}>Practice again</button>{saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}<button onClick={downloadDiagnostics}>Download diagnostics</button><Link href="/library">Back to library</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }
