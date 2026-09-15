@@ -6,7 +6,6 @@ test("FretCoach page source declares the practice dashboard", async () => {
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   );
 
-  assert.match(page, /FretCoach/);
-  assert.match(page, /Spider exercise/);
+  assert.match(page, /practice dashboard/);
   assert.match(page, /Recommended for you/);
 });

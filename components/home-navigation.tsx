@@ -26,7 +26,6 @@ export function HomeNavigation() {
     <div className="nav-actions">
       <Link className={linkClass("/")} href="/">Dashboard</Link>
       <Link className={linkClass("/library")} href="/library">Practice library</Link>
-      <Link className={linkClass("/tabs")} href="/tabs">Public tabs</Link>
       {session && <Link className={linkClass("/my-songs")} href="/my-songs">My songs</Link>}
       {session && <Link className={linkClass("/history")} href="/history">History</Link>}
       {session ? <details className="profile-menu"><summary className="avatar" aria-label={`Open profile menu for ${displayName}`}>{initials}</summary><div><b>{displayName}</b><button onClick={() => { clearSession(); setSession(null); }}>Sign out</button></div></details> : <Link className="signIn" href="/login">Sign in</Link>}
