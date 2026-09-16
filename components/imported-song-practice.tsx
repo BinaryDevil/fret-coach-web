@@ -3,13 +3,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioInput, AudioInputHandle } from "./audio-input";
-import { ApiError, CreatePracticeAttempt, getPracticeAttempt, getPracticeAttempts, getSession, ImportedTimeline, ImportedTrack, PracticeAttempt, savePracticeAttempt } from "../lib/fretcoach-api";
+import { ApiError, getPracticeAttempt, getPracticeAttempts, getSession, ImportedTimeline, ImportedTrack, savePracticeAttempt } from "../lib/fretcoach-api";
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
+import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
 import { ticksToMilliseconds } from "../lib/practice-evaluation";
 import styles from "./imported-song-practice.module.css";
 
-const MAX_ASSESSABLE_EVENTS = 32;
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 type InputQuality = "CHECK" | "PASS" | "RETRY";
 type AttemptReview = { accuracyPercent: number; correct: number; total: number; pitchCorrect: number; onsetTimingCorrect: number; inputConfidencePercent: number; saved: boolean };
@@ -36,10 +36,11 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   const measures = useMemo(() => [...new Set(all.map((event) => event.measure))], [all]);
   const [from, setFrom] = useState(measures[0] ?? 1);
   const [to, setTo] = useState(measures.at(-1) ?? 1);
-  const events = useMemo(() => all.filter((event) => event.measure >= from && event.measure <= to), [all, from, to]);
+  const passage = useMemo(() => selectPrivatePassage({ allEvents: all, from, to, scoreRevision }), [all, from, scoreRevision, to]);
+  const events: ImportedTimeline["events"] = passage.events;
   const current = events[active];
-  const assessabilityReason = !scoreRevision ? "This arrangement needs to be reloaded before an Attempt can be saved." : !events.length ? "Choose a passage with notes to assess." : events.length > MAX_ASSESSABLE_EVENTS ? `Choose a shorter passage (up to ${MAX_ASSESSABLE_EVENTS} notes).` : events.some((event) => event.pitches.length !== 1) ? "This passage is not assessable because it contains simultaneous notes." : null;
-  const assessable = !assessabilityReason;
+  const assessabilityReason = passage.reason;
+  const assessable = passage.assessable;
 
   const resetAttempt = useCallback(() => {
     readings.current = [];
@@ -71,7 +72,7 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
         const saved = items.find((attempt) => attempt.trackId === track.sourceTrackId && attempt.passageStartMeasure === from && attempt.passageEndMeasure === to && attempt.scoreRevision === scoreRevision);
         return saved ? getPracticeAttempt(saved.id, session.accessToken) : null;
       })
-      .then((attempt) => { if (attempt) setReview(reviewFromAttempt(attempt)); })
+      .then((attempt) => { if (attempt) setReview(reviewFromSavedAttempt(attempt)); })
       .catch(() => undefined);
   }, [from, scoreImportId, scoreRevision, to, track]);
   useEffect(() => { readSavedAttempt(); }, [readSavedAttempt]);
@@ -92,15 +93,11 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     if (!assessment.rating || !track || !scoreRevision) return;
     const session = getSession();
     if (!session) { setSaveMessage("Sign in again to save this Attempt."); return; }
-    const eventIndexById = new Map(all.map((event, index) => [event.id, index]));
-    const payload: CreatePracticeAttempt = {
-      clientRunId: crypto.randomUUID(), scoreImportId, trackId: track.sourceTrackId, passageStartMeasure: from, passageEndMeasure: to, scoreRevision, bpm, countInBeats: 0,
-      activeDurationMs: Math.round(activeDurationMs), startedAt: new Date(attemptStartedAt.current ?? Date.now() - activeDurationMs).toISOString(),
-      noteResults: assessment.events.map((event: { eventId: string; outcome: string; centsOffset?: number | null; timingOffsetMs?: number | null; confidence?: number | null }) => ({ timelineEventId: event.eventId, eventIndex: eventIndexById.get(event.eventId) ?? -1, outcome: event.outcome === "CORRECT" ? "CORRECT" : event.outcome === "WRONG_PITCH" ? "WRONG_PITCH" : "MISSING", ...(event.centsOffset == null ? {} : { centsOffset: event.centsOffset }), ...(event.timingOffsetMs == null ? {} : { timingOffsetMs: event.timingOffsetMs }), ...(event.confidence == null ? {} : { confidence: event.confidence }) })),
-    };
+    const payload = privateAttemptPayload({ assessment, allEvents: all, scoreImportId, trackId: track.sourceTrackId, from, to, scoreRevision, bpm, clientRunId: crypto.randomUUID(), activeDurationMs, startedAt: new Date(attemptStartedAt.current ?? Date.now() - activeDurationMs).toISOString() });
+    if (!payload) return;
     setSaveMessage("Saving Attempt…");
     void savePracticeAttempt(payload, session.accessToken)
-      .then((attempt) => { setReview(reviewFromAttempt(attempt)); setSaveMessage("Saved Attempt"); })
+      .then((attempt) => { setReview(reviewFromSavedAttempt(attempt)); setSaveMessage("Saved Attempt"); })
       .catch((cause) => setSaveMessage(cause instanceof ApiError ? cause.message : "Couldn’t save this Attempt."));
   }, [all, bpm, from, scoreImportId, scoreRevision, to, track]);
 
@@ -160,8 +157,8 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     previewTimer.current = window.setTimeout(() => { previewNodes.current = []; setPreviewing(false); }, ticksToMilliseconds(endTick - startTick, q, bpm) + 100);
   };
   const onPitch = (reading: PitchReading) => {
-    if (reading.confidence >= ASSESSMENT_CRITERIA.minimumInputConfidence) setInputQuality("PASS");
-    else if (inputQuality === "CHECK") setInputQuality("RETRY");
+    if (reading.confidence >= ASSESSMENT_CRITERIA.minimumInputConfidence) setInputQuality(inputQualityForConfidence(reading.confidence));
+    else if (inputQuality === "CHECK") setInputQuality(inputQualityForConfidence(reading.confidence));
     if (!playing) return;
     readings.current.push({ midi: reading.midi, tick: currentTick.current, confidence: reading.confidence, onset: reading.onset });
   };
@@ -176,10 +173,4 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     {(review || saveMessage) && <section className={styles.review} aria-live="polite"><b>{review?.saved ? "SAVED ATTEMPT" : "ATTEMPT REVIEW"}</b>{review && <><strong>{review.accuracyPercent}% Accuracy rating</strong><span>Pitch {review.pitchCorrect} / {review.total} · Onset timing {review.onsetTimingCorrect} / {review.total} · Input confidence {review.inputConfidencePercent}%</span></>}{saveMessage && <small>{saveMessage}</small>}</section>}
     <AudioInput ref={input} onPitchDetected={onPitch} targetMidi={current?.pitches[0] ?? null}/>
   </section>;
-}
-
-function reviewFromAttempt(attempt: PracticeAttempt): AttemptReview {
-  const total = attempt.totalTargetEvents;
-  const inputConfidence = attempt.noteResults.filter((result) => result.confidence !== undefined);
-  return { accuracyPercent: attempt.accuracyPercent, correct: attempt.correctCount, total, pitchCorrect: attempt.noteResults.filter((result) => result.outcome !== "WRONG_PITCH" && (result.outcome !== "MISSING" || result.timingOffsetMs !== undefined)).length, onsetTimingCorrect: attempt.correctCount, inputConfidencePercent: inputConfidence.length ? Math.round(inputConfidence.reduce((sum, result) => sum + (result.confidence ?? 0), 0) / inputConfidence.length * 100) : 0, saved: true };
 }
