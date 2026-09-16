@@ -13,9 +13,8 @@ export function midiToNoteName(midi: number) {
 export function pitchMatch(reading: PitchReading, expectedPitches: number[], centsTolerance = 45): PitchMatch | null {
   if (!expectedPitches.length) return null;
   const candidate = expectedPitches.map((expectedMidi) => {
-    const octaveShift = Math.max(-1, Math.min(1, Math.round((expectedMidi - reading.midi) / 12)));
-    const correctedMidi = reading.midi + octaveShift * 12;
-    return { expectedMidi, correctedMidi, octaveShift, cents: (correctedMidi - expectedMidi) * 100 };
+    const octaveShift = Math.round((reading.midi - expectedMidi) / 12);
+    return { expectedMidi, correctedMidi: reading.midi, octaveShift, cents: (reading.midi - expectedMidi) * 100 };
   }).sort((left, right) => Math.abs(left.cents) - Math.abs(right.cents))[0];
   return { ...candidate, rawMidi: reading.midi, inTune: Math.abs(candidate.cents) <= centsTolerance };
 }

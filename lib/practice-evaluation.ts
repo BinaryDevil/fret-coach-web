@@ -1,5 +1,6 @@
 import { ScoreNoteEvent } from "./fretcoach-api";
 import { pitchMatch, PitchReading } from "./pitch-detection";
+import { ASSESSMENT_CRITERIA } from "./attempt-evaluation.mjs";
 
 export const PRACTICE_STRICTNESS = [
   { id: "guided", label: "1 · Guided", centsTolerance: 85, timingToleranceMs: 400 },
@@ -12,7 +13,7 @@ export const PRACTICE_STRICTNESS = [
 export type PracticeStrictness = (typeof PRACTICE_STRICTNESS)[number];
 export type PracticeStrictnessId = PracticeStrictness["id"];
 export const DEFAULT_PRACTICE_STRICTNESS = PRACTICE_STRICTNESS[1];
-export const PRACTICE_TIMING_TOLERANCE_MS = DEFAULT_PRACTICE_STRICTNESS.timingToleranceMs;
+export const PRACTICE_TIMING_TOLERANCE_MS = ASSESSMENT_CRITERIA.onsetTimingToleranceMs;
 export const ticksToMilliseconds = (ticks: number, ticksPerQuarter: number, bpm: number) => (ticks / ticksPerQuarter) * (60_000 / bpm);
 
 export type LastAcceptedPitch = { eventId: string; midi: number } | null;
@@ -27,16 +28,16 @@ export function isNewNoteAttack(reading: PitchReading, eventId: string, previous
   return reading.onset || (previous?.eventId !== eventId && (!previous || Math.abs(reading.midi - previous.midi) >= 0.35));
 }
 
-export function findTargetForReading(events: ScoreNoteEvent[], range: { start: number; end: number }, tick: number, millisecondsPerTick: number, reading: PitchReading, resolved: Record<string, string>, strictness: PracticeStrictness = DEFAULT_PRACTICE_STRICTNESS) {
-  const toleranceTicks = strictness.timingToleranceMs / millisecondsPerTick;
+export function findTargetForReading(events: ScoreNoteEvent[], range: { start: number; end: number }, tick: number, millisecondsPerTick: number, reading: PitchReading, resolved: Record<string, string>) {
+  const toleranceTicks = ASSESSMENT_CRITERIA.onsetTimingToleranceMs / millisecondsPerTick;
   let best: { index: number; match: NonNullable<ReturnType<typeof pitchMatch>>; distance: number } | null = null;
   for (let index = range.start; index < range.end; index += 1) {
     const event = events[index];
     // A later correct attack can replace an early wrong-pitch reading in this window.
     if (event.isRest || resolved[event.id] === "correct") continue;
     if (tick < event.startTick - toleranceTicks || tick > event.startTick + event.durationTicks + toleranceTicks) continue;
-    const match = pitchMatch(reading, event.pitches, strictness.centsTolerance);
-    if (!match || Math.abs(match.cents) > 500) continue;
+    const match = pitchMatch(reading, event.pitches, ASSESSMENT_CRITERIA.centsTolerance);
+    if (!match) continue;
     const distance = Math.abs(tick - (event.startTick + event.durationTicks / 2));
     if (!best || distance < best.distance) best = { index, match, distance };
   }

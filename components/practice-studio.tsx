@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, CreatePracticeAttempt, Exercise, getExercise, getSession, PracticeAttemptOutcome, savePracticeAttempt } from "../lib/fretcoach-api";
 import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
 import { DEFAULT_PRACTICE_STRICTNESS, findTargetForReading, isNewNoteAttack, LastAcceptedPitch, PRACTICE_STRICTNESS, PracticeStrictnessId, ticksToMilliseconds } from "../lib/practice-evaluation";
+import { ASSESSMENT_CRITERIA } from "../lib/attempt-evaluation.mjs";
+import { evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { AudioInput, AudioInputHandle } from "./audio-input";
 import { HomeNavigation } from "./home-navigation";
 import styles from "./practice-studio.module.css";
@@ -13,7 +15,8 @@ import styles from "./practice-studio.module.css";
 type AlphaApi = { tex: (value: string) => void; destroy?: () => void; scoreLoaded?: { on: (listener: () => void) => void } };
 type Playhead = { left: number; top: number; height: number };
 type NoteState = "pending" | "correct" | "wrong-pitch" | "missing" | "extra-note";
-type PassSummary = { accuracy: number; correct: number; wrongPitch: number; missing: number; extraNotes: number; total: number };
+type PassSummary = { assessable: boolean; accuracy: number; correct: number; wrongPitch: number; missing: number; extraNotes: number; total: number; pitchCorrect: number; onsetTimingCorrect: number; inputConfidencePercent: number };
+type InputQuality = "CHECK" | "PASS" | "RETRY" | "PRACTICE_WITHOUT_ASSESSMENT";
 type NoteDiagnostic = { detectedMidi: number; correctedMidi: number; centsOffset: number; octaveShift: number; confidence: number; timingOffsetMs: number };
 type SaveStatus = "saving" | "saved" | "retrying" | "unsaved" | "stale";
 type PracticeTraceEntry = {
@@ -79,6 +82,8 @@ export function PracticeStudio() {
   const [summary, setSummary] = useState<PassSummary | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
   const [saveError, setSaveError] = useState("");
+  const [inputQuality, setInputQuality] = useState<InputQuality>("CHECK");
+  const [assessmentEnabled, setAssessmentEnabled] = useState(true);
 
   const loadExercise = useCallback(() => {
     const session = getSession();
@@ -113,7 +118,6 @@ export function PracticeStudio() {
   }, [exercise]);
 
   const timeline = exercise?.score?.timeline;
-  const strictnessConfig = useMemo(() => PRACTICE_STRICTNESS.find((option) => option.id === strictness) ?? DEFAULT_PRACTICE_STRICTNESS, [strictness]);
   const events = useMemo(() => timeline?.events ?? [], [timeline]);
   const activeLoop = useMemo(() => exercise?.loopRegions.find((region) => region.id === loopId) ?? exercise?.loopRegions[0], [exercise, loopId]);
   const range = useMemo(() => {
@@ -196,17 +200,19 @@ export function PracticeStudio() {
       const event = events[index];
       if (!event.isRest && !finalStates[event.id]) finalStates[event.id] = "missing";
     }
+    const assessment = assessmentEnabled ? evaluateAttempt({ events: events.slice(range.start, range.end), readings: practiceTraceRef.current.map((reading) => ({ midi: reading.detectedMidi, tick: reading.tick, confidence: reading.confidence, onset: reading.onset })), ticksPerQuarter: timeline?.ticksPerQuarter ?? 480, bpm }) : null;
+    if (assessment?.assessable && assessment.rating) {
+      for (const outcome of assessment.events) finalStates[outcome.eventId] = outcome.outcome === "CORRECT" ? "correct" : outcome.outcome === "WRONG_PITCH" ? "wrong-pitch" : "missing";
+      setSummary({ assessable: true, accuracy: assessment.rating.accuracyPercent, correct: assessment.rating.correct, wrongPitch: assessment.events.filter((event: { outcome: string }) => event.outcome === "WRONG_PITCH").length, missing: assessment.events.filter((event: { outcome: string }) => event.outcome === "MISSING" || event.outcome === "WRONG_TIMING").length, extraNotes: 0, total: assessment.rating.total, pitchCorrect: assessment.rating.pitchCorrect, onsetTimingCorrect: assessment.rating.onsetTimingCorrect, inputConfidencePercent: assessment.rating.inputConfidencePercent });
+      saveFinalizedAttempt(finalStates, activeDurationMs);
+    } else {
+      setSummary({ assessable: false, accuracy: 0, correct: 0, wrongPitch: 0, missing: 0, extraNotes: 0, total: events.slice(range.start, range.end).filter((event) => !event.isRest).length, pitchCorrect: 0, onsetTimingCorrect: 0, inputConfidencePercent: 0 });
+    }
     noteStatesRef.current = finalStates;
     setNoteStates(finalStates);
-    const targets = events.slice(range.start, range.end).filter((event) => !event.isRest);
-    const count = (state: NoteState) => targets.filter((event) => finalStates[event.id] === state).length;
-    const correct = count("correct");
-    const extraNotes = count("extra-note");
-    setSummary({ accuracy: targets.length ? Math.round((correct / targets.length) * 100) : 0, correct, wrongPitch: count("wrong-pitch"), missing: count("missing") + extraNotes, extraNotes, total: targets.length });
-    saveFinalizedAttempt(finalStates, activeDurationMs);
     playingRef.current = false;
     setPlaying(false);
-  }, [events, range, saveFinalizedAttempt]);
+  }, [assessmentEnabled, bpm, events, range, saveFinalizedAttempt, timeline]);
 
   useEffect(() => {
     if (!range) return;
@@ -306,7 +312,7 @@ export function PracticeStudio() {
     if (!playing || !timeline || !range) return;
     const millisecondsPerTick = ticksToMilliseconds(1, timeline.ticksPerQuarter, bpm);
     const loopDuration = ticksToMilliseconds(range.endTick - range.startTick, timeline.ticksPerQuarter, bpm);
-    const toleranceTicks = strictnessConfig.timingToleranceMs / millisecondsPerTick;
+    const toleranceTicks = ASSESSMENT_CRITERIA.onsetTimingToleranceMs / millisecondsPerTick;
     const step = () => {
       const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
       const rawElapsed = Math.max(0, now - startRef.current);
@@ -342,10 +348,11 @@ export function PracticeStudio() {
     };
     frameRef.current = requestAnimationFrame(step);
     return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [bpm, events, finishPass, metronome, playing, range, strictnessConfig.timingToleranceMs, timeline, updateStates]);
+  }, [bpm, events, finishPass, metronome, playing, range, timeline, updateStates]);
 
   const handlePitch = useCallback((reading: PitchReading) => {
     setDetectedPitch(reading);
+    if (assessmentEnabled) setInputQuality((quality) => reading.confidence >= ASSESSMENT_CRITERIA.minimumInputConfidence ? "PASS" : quality === "CHECK" ? "RETRY" : quality);
     const trace: PracticeTraceEntry = {
       elapsedMs: Math.round(elapsedRef.current),
       tick: Math.round(currentTickRef.current),
@@ -362,7 +369,7 @@ export function PracticeStudio() {
     };
     if (!playingRef.current || !timeline || !range || reading.confidence < 0.65) { addTrace(); return; }
     const millisecondsPerTick = ticksToMilliseconds(1, timeline.ticksPerQuarter, bpm);
-    const target = findTargetForReading(events, range, currentTickRef.current, millisecondsPerTick, reading, noteStatesRef.current, strictnessConfig);
+    const target = findTargetForReading(events, range, currentTickRef.current, millisecondsPerTick, reading, noteStatesRef.current);
     if (!target) { trace.decision = "no-target"; addTrace(); return; }
     const event = events[target.index];
     const match = target.match;
@@ -390,7 +397,7 @@ export function PracticeStudio() {
       };
       return { ...previous, [event.id]: nextState };
     });
-  }, [bpm, events, range, strictnessConfig, timeline, updateStates]);
+  }, [assessmentEnabled, bpm, events, range, timeline, updateStates]);
 
   const play = () => {
     if (playing || countInBeat) { playingRef.current = false; setPlaying(false); setCountInBeat(0); return; }
@@ -413,7 +420,7 @@ export function PracticeStudio() {
   const reset = useCallback(() => {
     playingRef.current = false;
     if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
-    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; retrySaveRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null); setSaveError("");
+    setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; retrySaveRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null); setSaveError(""); setInputQuality("CHECK"); setAssessmentEnabled(true);
     if (range) { setActive(range.start); activeIndexRef.current = range.start; currentTickRef.current = range.startTick; }
     updateStates(() => ({}));
   }, [range, updateStates]);
@@ -432,7 +439,7 @@ export function PracticeStudio() {
       version: 1,
       generatedAt: new Date().toISOString(),
       exercise: { id: exercise.id, slug: exercise.slug, title: exercise.title },
-      transport: { bpm, countInBeats, strictness: strictnessConfig, ticksPerQuarter: timeline.ticksPerQuarter },
+      transport: { bpm, countInBeats, practiceAssist: strictness, assessmentCriteria: ASSESSMENT_CRITERIA, ticksPerQuarter: timeline.ticksPerQuarter },
       range: { startEventIndex: range.start, endEventIndex: range.end - 1, startTick: range.startTick, endTick: range.endTick },
       expectedEvents: events.map((event, eventIndex) => ({ event, eventIndex })).filter(({ eventIndex, event }) => eventIndex >= range.start && eventIndex < range.end && !event.isRest).map(({ event, eventIndex }) => ({ eventIndex, id: event.id, startTick: event.startTick, durationTicks: event.durationTicks, pitches: event.pitches, measure: event.measure, beat: event.beat, state: noteStatesRef.current[event.id] ?? "missing" })),
       readings: practiceTraceRef.current,
@@ -465,8 +472,12 @@ export function PracticeStudio() {
       <div className={styles.feedback} aria-live="polite"><span>PLAY <b>{expected}</b></span><span className={styles[`state${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`]}>● {readingStatus(detectedPitch, activeState, feedbackLabel)}</span></div>
       <div ref={scoreViewElement} className={styles.scoreView}><div ref={scoreElement} className="alphaTab" />{playhead && <div aria-hidden="true" className={`${styles.playhead} ${styles[`playhead${activeState.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase())}`] ?? ""}`} style={{ left: playhead.left, top: playhead.top, height: playhead.height }} />}</div>
     </section>
+    <section className={styles.inputQuality} aria-label="Input quality">
+      <div><p>INPUT QUALITY</p><strong>{inputQuality === "PASS" ? "Ready for assessment" : inputQuality === "RETRY" ? "Try your input again" : inputQuality === "PRACTICE_WITHOUT_ASSESSMENT" ? "Practice without assessment" : "Check your input"}</strong><span>{inputQuality === "PASS" ? "A clear note was detected with enough confidence for an Accuracy rating." : inputQuality === "RETRY" ? "Play a clear note, reduce background sound, or choose a different input." : inputQuality === "PRACTICE_WITHOUT_ASSESSMENT" ? "You can practice, but this Attempt will not receive an Accuracy rating." : "Connect your guitar and play one clear note before starting an assessable Attempt."}</span></div>
+      <div><button onClick={() => void inputRef.current?.start()}>Check input</button><button className={styles.withoutAssessment} onClick={() => { setAssessmentEnabled(false); setInputQuality("PRACTICE_WITHOUT_ASSESSMENT"); }}>Practice without assessment</button></div>
+    </section>
     <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Scoring strictness" value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
-    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>PASS COMPLETE</p><h2 id="practice-result-title">{summary.accuracy}% accuracy</h2><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed{summary.extraNotes ? ` · ${summary.extraNotes} extra` : ""}</span><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small><div><button onClick={reset}>Practice again</button>{saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}<button onClick={downloadDiagnostics}>Download diagnostics</button><Link href="/library">Back to library</Link></div></section></div>}
+    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>{summary.assessable ? "ATTEMPT REVIEW" : "UNASSESSABLE ATTEMPT"}</p><h2 id="practice-result-title">{summary.assessable ? `${summary.accuracy}% Accuracy rating` : "No Accuracy rating"}</h2>{summary.assessable ? <><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed</span><div className={styles.ratingEvidence}><span>Pitch <b>{summary.pitchCorrect} / {summary.total}</b></span><span>Onset timing <b>{summary.onsetTimingCorrect} / {summary.total}</b></span><span>Input confidence <b>{summary.inputConfidencePercent}%</b></span></div><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small></> : <p className={styles.resultAdvice}>Your input was not clear enough for a trustworthy Performance diagnosis. Adjust your input or choose practice without assessment again.</p>}<div><button onClick={reset}>Practice again</button>{summary.assessable && saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}{summary.assessable && <button onClick={downloadDiagnostics}>Download diagnostics</button>}<Link href="/library">Back to library</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }
