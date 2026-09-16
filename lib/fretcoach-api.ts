@@ -9,13 +9,14 @@ export type DashboardExerciseCard = { id: string; slug: string; type: "CHROMATIC
 export type DashboardResponse = { nextPractice: DashboardExerciseCard | null; stats: { currentDayStreak: number; averageAccuracyPercent: number; playedThisWeekMs: number }; coachNote: string; recommendations: Array<DashboardExerciseCard & { rank: number }> };
 export type PracticeAttemptOutcome = "CORRECT" | "WRONG_PITCH" | "MISSING" | "EXTRA_NOTE";
 export type PracticeAttemptNoteResult = { timelineEventId: string; eventIndex: number; outcome: PracticeAttemptOutcome; detectedMidi?: number; correctedMidi?: number; centsOffset?: number; octaveShift?: number; confidence?: number; timingOffsetMs?: number };
-export type CreatePracticeAttempt = { clientRunId: string; exerciseId: string; loopRegionId?: string; scoreRevision: string; bpm: number; countInBeats: 0 | 2 | 4; activeDurationMs: number; startedAt: string; noteResults: PracticeAttemptNoteResult[] };
-export type PracticeAttemptSummary = { id: string; exerciseId: string; loopRegionId?: string | null; bpm: number; activeDurationMs: number; totalTargetEvents: number; correctCount: number; wrongPitchCount: number; missingCount: number; extraNoteCount: number; accuracyPercent: number; completedAt: string; exercise?: { title: string; slug: string } | null };
+export type CreatePracticeAttempt = { clientRunId: string; exerciseId?: string; scoreImportId?: string; trackId?: string; passageStartMeasure?: number; passageEndMeasure?: number; loopRegionId?: string; scoreRevision: string; bpm: number; countInBeats: 0 | 2 | 4; activeDurationMs: number; startedAt: string; noteResults: PracticeAttemptNoteResult[] };
+export type PracticeAttemptSummary = { id: string; exerciseId?: string | null; scoreImportId?: string | null; trackId?: string | null; passageStartMeasure?: number | null; passageEndMeasure?: number | null; loopRegionId?: string | null; scoreRevision?: string; bpm: number; activeDurationMs: number; totalTargetEvents: number; correctCount: number; wrongPitchCount: number; missingCount: number; extraNoteCount: number; accuracyPercent: number; completedAt: string; exercise?: { title: string; slug: string } | null };
 export type PracticeAttemptPage = { items: PracticeAttemptSummary[]; nextCursor: string | null };
+export type PracticeAttempt = PracticeAttemptSummary & { countInBeats: 0 | 2 | 4; startedAt?: string | null; noteResults: Array<PracticeAttemptNoteResult & { measure?: number; beat?: number; startTick?: number; expectedPitches?: number[] }> };
 export type ScoreFormat = "GUITAR_PRO" | "MUSIC_XML" | "ALPHA_TEX";
 export type ImportedTrack = { id: string; sourceTrackId: string; trackIndex: number; name: string; instrument: string; tuning: number[]; capo?: number | null };
 export type ImportedTimeline = { version: number; defaultBpm: number; ticksPerQuarter?: number; tracks: Array<{ id: string; index: number; name: string; instrument: string; tuning: number[]; capo?: number | null }>; events: Array<ScoreNoteEvent & { trackId?: string; sourceTrackId?: string; trackIndex?: number }> };
-export type ScoreImport = { id: string; status: "UPLOAD_PENDING" | "PROCESSING" | "READY" | "FAILED"; format: ScoreFormat; originalFileName: string; parseError?: string | null; song?: { id: string; title: string; artist?: string | null }; timeline?: ImportedTimeline | null; tracks?: ImportedTrack[] };
+export type ScoreImport = { id: string; status: "UPLOAD_PENDING" | "PROCESSING" | "READY" | "FAILED"; format: ScoreFormat; originalFileName: string; parseError?: string | null; score?: { revision: string }; song?: { id: string; title: string; artist?: string | null }; timeline?: ImportedTimeline | null; tracks?: ImportedTrack[] };
 export type CreateScoreImportResponse = { song: { id: string; title: string; artist?: string | null }; scoreImport: ScoreImport; upload: { uploadUrl: string; uploadMethod: "PUT"; uploadHeaders: Record<string, string>; expiresInSeconds: number } };
 export type ScoreImportSource = { id: string; format: ScoreFormat; originalFileName: string; sourceUrl: string; expiresInSeconds: number };
 export type ScoreImportListItem = ScoreImport & { createdAt: string; updatedAt: string; song: { id: string; title: string; artist?: string | null } };
@@ -63,10 +64,11 @@ export function loginWithGoogleCredential(credential: string) { return request<A
 export function listExercises(token?: string) { return request<Exercise[]>("/exercises", {}, token); }
 export function getDashboard(token: string) { return request<DashboardResponse>("/dashboard/me", {}, token); }
 export function getExercise(slug: string, token?: string) { return request<Exercise>(`/exercises/slug/${encodeURIComponent(slug)}`, {}, token); }
-export function savePracticeAttempt(attempt: CreatePracticeAttempt, token: string) { return request<unknown>("/practice-attempts", { method: "POST", body: JSON.stringify(attempt) }, token); }
-export function getPracticeAttempts(token: string, limit = 20, cursor?: string | null) {
-  return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {}, token);
+export function savePracticeAttempt(attempt: CreatePracticeAttempt, token: string) { return request<PracticeAttempt>("/practice-attempts", { method: "POST", body: JSON.stringify(attempt) }, token); }
+export function getPracticeAttempts(token: string, limit = 20, cursor?: string | null, scoreImportId?: string) {
+  return request<PracticeAttemptPage>(`/practice-attempts?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${scoreImportId ? `&scoreImportId=${encodeURIComponent(scoreImportId)}` : ""}`, {}, token);
 }
+export function getPracticeAttempt(id: string, token: string) { return request<PracticeAttempt>(`/practice-attempts/${encodeURIComponent(id)}`, {}, token); }
 export function createScoreImport(input: { title: string; artist?: string; format: ScoreFormat; fileName: string; mimeType: string; sizeBytes: number }, token: string) { return request<CreateScoreImportResponse>("/score-imports", { method: "POST", body: JSON.stringify(input) }, token); }
 export function completeScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}/complete`, { method: "POST" }, token); }
 export function getScoreImport(importId: string, token: string) { return request<ScoreImport>(`/score-imports/${encodeURIComponent(importId)}`, {}, token); }
