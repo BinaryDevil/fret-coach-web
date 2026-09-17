@@ -8,6 +8,7 @@ import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
 import { DEFAULT_PRACTICE_STRICTNESS, findTargetForReading, isNewNoteAttack, LastAcceptedPitch, PRACTICE_STRICTNESS, PracticeStrictnessId, ticksToMilliseconds } from "../lib/practice-evaluation";
 import { ASSESSMENT_CRITERIA } from "../lib/attempt-evaluation.mjs";
 import { evaluateAttempt } from "../lib/attempt-evaluation.mjs";
+import { safePrivatePassageReturn } from "../lib/private-intervention.mjs";
 import { AudioInput, AudioInputHandle } from "./audio-input";
 import { HomeNavigation } from "./home-navigation";
 import styles from "./practice-studio.module.css";
@@ -44,6 +45,8 @@ export function PracticeStudio() {
   const router = useRouter();
   const search = useSearchParams();
   const slug = search.get("slug") ?? "chromatic-1-2-3-4";
+  const returnTo = safePrivatePassageReturn(search.get("returnTo"));
+  const practicePath = `/practice?${new URLSearchParams({ slug, ...(returnTo ? { returnTo } : {}) })}`;
   const scoreViewElement = useRef<HTMLDivElement>(null);
   const scoreElement = useRef<HTMLDivElement>(null);
   const apiRef = useRef<AlphaApi | null>(null);
@@ -88,14 +91,14 @@ export function PracticeStudio() {
   const loadExercise = useCallback(() => {
     const session = getSession();
     if (!session) {
-      router.replace(`/login?next=${encodeURIComponent(`/practice?slug=${slug}`)}`);
+      router.replace(`/login?next=${encodeURIComponent(practicePath)}`);
       return Promise.resolve();
     }
     return getExercise(slug, session.accessToken)
       .then((item) => { setExercise(item); setBpm(item.configuration.targetBpm); setLoopId(item.loopRegions[0]?.id ?? ""); })
       .catch((cause) => { setError(cause instanceof Error ? cause.message : "Unable to load exercise"); })
       .finally(() => setLoading(false));
-  }, [router, slug]);
+  }, [practicePath, router, slug]);
 
   useEffect(() => { void loadExercise(); }, [loadExercise]);
 
@@ -477,7 +480,7 @@ export function PracticeStudio() {
       <div><button onClick={() => void inputRef.current?.start()}>Check input</button><button className={styles.withoutAssessment} onClick={() => { setAssessmentEnabled(false); setInputQuality("PRACTICE_WITHOUT_ASSESSMENT"); }}>Practice without assessment</button></div>
     </section>
     <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Scoring strictness" value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
-    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>{summary.assessable ? "ATTEMPT REVIEW" : "UNASSESSABLE ATTEMPT"}</p><h2 id="practice-result-title">{summary.assessable ? `${summary.accuracy}% Accuracy rating` : "No Accuracy rating"}</h2>{summary.assessable ? <><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed</span><div className={styles.ratingEvidence}><span>Pitch <b>{summary.pitchCorrect} / {summary.total}</b></span><span>Onset timing <b>{summary.onsetTimingCorrect} / {summary.total}</b></span><span>Input confidence <b>{summary.inputConfidencePercent}%</b></span></div><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small></> : <p className={styles.resultAdvice}>Your input was not clear enough for a trustworthy Performance diagnosis. Adjust your input or choose practice without assessment again.</p>}<div><button onClick={reset}>Practice again</button>{summary.assessable && saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}{summary.assessable && <button onClick={downloadDiagnostics}>Download diagnostics</button>}<Link href="/library">Back to library</Link></div></section></div>}
+    {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>{summary.assessable ? "ATTEMPT REVIEW" : "UNASSESSABLE ATTEMPT"}</p><h2 id="practice-result-title">{summary.assessable ? `${summary.accuracy}% Accuracy rating` : "No Accuracy rating"}</h2>{summary.assessable ? <><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed</span><div className={styles.ratingEvidence}><span>Pitch <b>{summary.pitchCorrect} / {summary.total}</b></span><span>Onset timing <b>{summary.onsetTimingCorrect} / {summary.total}</b></span><span>Input confidence <b>{summary.inputConfidencePercent}%</b></span></div><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small></> : <p className={styles.resultAdvice}>Your input was not clear enough for a trustworthy Performance diagnosis. Adjust your input or choose practice without assessment again.</p>}<div><button onClick={reset}>Practice again</button>{summary.assessable && saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}{summary.assessable && <button onClick={downloadDiagnostics}>Download diagnostics</button>}<Link href={returnTo ?? "/library"}>{returnTo ? "Return to your passage" : "Back to library"}</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }

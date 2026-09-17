@@ -4,6 +4,7 @@ import test from "node:test";
 import { evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
+import { interventionNavigation } from "../lib/private-intervention.mjs";
 
 const source = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -89,6 +90,24 @@ test("later like-for-like private Attempts show meaningful change from the Basel
 
   assert.deepEqual(reviewPrivateAttemptHistory({ baselineAttemptId: "baseline", items: [baseline, later] }).comparison, { baselineAccuracyPercent: 50, accuracyChangePercent: 50, message: "50 points above your Baseline." });
   assert.equal(reviewPrivateAttemptHistory({ baselineAttemptId: "baseline", items: [baseline, { ...later, bpm: 100 }] }).comparison, null);
+});
+
+test("a private weak point recommends a curated exercise and returns to the selected passage", () => {
+  const navigation = interventionNavigation({
+    weakPoint: { kind: "PITCH", eventId: "first", observed: "Wrong pitch on 1 of 2 notes." },
+    scoreImportId: "private-song",
+    trackId: "timeline-track",
+    from: 2,
+    to: 3,
+  });
+
+  assert.deepEqual(navigation.recommendation, {
+    slug: "chromatic-1-2-3-4",
+    title: "1-2-3-4 Spider Exercise",
+    reason: "Build cleaner fretting before returning to this passage.",
+  });
+  assert.equal(navigation.href, "/practice?slug=chromatic-1-2-3-4&returnTo=%2Fmy-songs%2Fprivate-song%3Ftrack%3Dtimeline-track%26from%3D2%26to%3D3");
+  assert.doesNotMatch(navigation.href, /scoreImportId|mastered|progress/);
 });
 
 test("correction feedback is separate from Attempt evidence and telemetry requires consent", () => {
