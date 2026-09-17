@@ -8,7 +8,7 @@ import { ApiError, getPrivateAttemptHistory, getSession, ImportedTimeline, Impor
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
-import { interventionNavigation } from "../lib/private-intervention.mjs";
+import { interventionNavigation, privatePassageReturnTarget } from "../lib/private-intervention.mjs";
 import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
 import { ticksToMilliseconds } from "../lib/practice-evaluation";
 import styles from "./imported-song-practice.module.css";
@@ -18,7 +18,7 @@ type InputQuality = "CHECK" | "PASS" | "RETRY";
 type AttemptReview = { accuracyPercent: number; correct: number; total: number; pitchCorrect: number; onsetTimingCorrect: number; inputConfidencePercent: number; saved: boolean };
 type ReviewGuidance = NonNullable<ReturnType<typeof reviewPrivateAttemptHistory>>;
 
-export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevision, initialFrom, initialTo, onActiveBeatChange }: { timeline: ImportedTimeline; track: ImportedTrack | null; scoreImportId: string; scoreRevision?: string; initialFrom?: number; initialTo?: number; onActiveBeatChange?: (beat: number) => void }) {
+export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevision, initialPassage, onActiveBeatChange }: { timeline: ImportedTimeline; track: ImportedTrack | null; scoreImportId: string; scoreRevision?: string; initialPassage?: NonNullable<ReturnType<typeof privatePassageReturnTarget>> | null; onActiveBeatChange?: (beat: number) => void }) {
   const input = useRef<AudioInputHandle>(null);
   const audio = useRef<AudioContext | null>(null);
   const frame = useRef<number | null>(null);
@@ -45,7 +45,7 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   const [from, setFrom] = useState(measures[0] ?? 1);
   const [to, setTo] = useState(measures.at(-1) ?? 1);
   const passage = useMemo(() => selectPrivatePassage({ allEvents: all, from, to, scoreRevision }), [all, from, scoreRevision, to]);
-  const techniqueNavigation = guidance && track ? interventionNavigation({ weakPoint: guidance.weakPoint, scoreImportId, trackId: track.sourceTrackId, from, to }) : null;
+  const techniqueNavigation = guidance && track ? interventionNavigation({ weakPoint: guidance.weakPoint, target: { scoreImportId, trackId: track.sourceTrackId, from, to } }) : null;
   const events: ImportedTimeline["events"] = passage.events;
   const current = events[active];
   const assessabilityReason = passage.reason;
@@ -65,13 +65,13 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   useEffect(() => {
     const first = measures[0] ?? 1;
     const last = measures.at(-1) ?? 1;
-    const requestedFrom = initialFrom && measures.includes(initialFrom) ? initialFrom : first;
-    const requestedTo = initialTo && measures.includes(initialTo) && initialTo >= requestedFrom ? initialTo : last;
+    const requestedFrom = initialPassage?.from && measures.includes(initialPassage.from) ? initialPassage.from : first;
+    const requestedTo = initialPassage?.to && measures.includes(initialPassage.to) && initialPassage.to >= requestedFrom ? initialPassage.to : last;
     setFrom(requestedFrom);
     setTo(requestedTo);
     setBpm(timeline.defaultBpm);
     resetAttempt();
-  }, [initialFrom, initialTo, measures, resetAttempt, timeline.defaultBpm]);
+  }, [initialPassage, measures, resetAttempt, timeline.defaultBpm]);
   useEffect(() => { onActiveBeatChange?.(current?.beat ?? 0); }, [current?.beat, onActiveBeatChange]);
   useEffect(() => () => {
     if (frame.current) cancelAnimationFrame(frame.current);
