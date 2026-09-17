@@ -95,4 +95,5 @@ test("correction feedback is separate from Attempt evidence and telemetry requir
   assert.deepEqual(correctionPayload({ subject: "INTERVENTION", isHelpful: false, note: "This did not match the problem." }), { subject: "INTERVENTION", isHelpful: false, note: "This did not match the problem." });
   assert.equal(telemetryPayload({ consent: false, scoreImportId: "private-song", eventType: "REVIEW_SHOWN" }), null);
   assert.deepEqual(telemetryPayload({ consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "REVIEW_SHOWN", trackId: "timeline-track", passageStartMeasure: 1, passageEndMeasure: 1 }), { consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "REVIEW_SHOWN", trackId: "timeline-track", passageStartMeasure: 1, passageEndMeasure: 1 });
+  assert.deepEqual(telemetryPayload({ consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "RETURNED" }), { consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "RETURNED" });
 });

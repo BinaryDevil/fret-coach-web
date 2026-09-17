@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioInput, AudioInputHandle } from "./audio-input";
-import { ApiError, getPrivateAttemptHistory, getSession, ImportedTimeline, ImportedTrack, recordPilotTelemetry, saveAttemptCorrection, savePracticeAttempt } from "../lib/fretcoach-api";
+import { ApiError, getPrivateAttemptHistory, getSession, ImportedTimeline, ImportedTrack, PilotTelemetryEventType, recordPilotTelemetry, saveAttemptCorrection, savePracticeAttempt } from "../lib/fretcoach-api";
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
@@ -14,7 +14,7 @@ import styles from "./imported-song-practice.module.css";
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 type InputQuality = "CHECK" | "PASS" | "RETRY";
 type AttemptReview = { accuracyPercent: number; correct: number; total: number; pitchCorrect: number; onsetTimingCorrect: number; inputConfidencePercent: number; saved: boolean };
-type ReviewGuidance = { baselineId: string | null; comparison: { baselineAccuracyPercent: number; accuracyChangePercent: number; message: string } | null; weakPoint: { kind: string; eventId: string | null; observed: string }; intervention: { label: string; action: string } };
+type ReviewGuidance = NonNullable<ReturnType<typeof reviewPrivateAttemptHistory>>;
 
 export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevision, onActiveBeatChange }: { timeline: ImportedTimeline; track: ImportedTrack | null; scoreImportId: string; scoreRevision?: string; onActiveBeatChange?: (beat: number) => void }) {
   const input = useRef<AudioInputHandle>(null);
@@ -73,7 +73,7 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     void input.current?.stop();
   }, []);
 
-  const sendTelemetry = useCallback((eventType: "SETUP_OUTCOME" | "INPUT_QUALITY_OUTCOME" | "PASSAGE_SELECTED" | "ATTEMPT_STARTED" | "ATTEMPT_FINISHED" | "ATTEMPT_UNASSESSABLE" | "REVIEW_SHOWN" | "CORRECTION_SUBMITTED", extras: { attemptId?: string; outcome?: string; reason?: string } = {}) => {
+  const sendTelemetry = useCallback((eventType: PilotTelemetryEventType, extras: { attemptId?: string; outcome?: string; reason?: string } = {}) => {
     const session = getSession();
     if (!session || !track) return;
     const payload = telemetryPayload({ consent: telemetryConsent, scoreImportId, eventType, trackId: track.sourceTrackId, passageStartMeasure: from, passageEndMeasure: to, ...extras });
@@ -193,6 +193,10 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
       .then(() => { setCorrectionMessage("Thanks — your feedback is retained separately from this Attempt."); sendTelemetry("CORRECTION_SUBMITTED", { attemptId: reviewAttemptId, outcome: subject }); })
       .catch(() => setCorrectionMessage("Your feedback could not be saved. Please try again."));
   };
+  const returnToPassage = () => {
+    if (reviewAttemptId) sendTelemetry("RETURNED", { attemptId: reviewAttemptId });
+    resetAttempt();
+  };
 
   return <section className={styles.player}>
     <div className={styles.status}><span>{playing ? "NOW PLAYING" : previewing ? "PREVIEWING" : "READY"}</span><b>Play {expected}</b><i>{assessable ? `${events.length} assessable notes` : "Not assessable"}</i></div>
@@ -200,7 +204,7 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     <div className={styles.range}><label>From <select value={from} onChange={(event) => { const value = Number(event.target.value); setFrom(value); if (value > to) setTo(value); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{measures.map((measure) => <option key={measure}>{measure}</option>)}</select></label><label>To <select value={to} onChange={(event) => { setTo(Number(event.target.value)); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{measures.filter((measure) => measure >= from).map((measure) => <option key={measure}>{measure}</option>)}</select></label><span>{active + 1} / {events.length}</span></div>
     <section className={styles.inputQuality} aria-label="Input quality"><div><b>INPUT QUALITY</b><strong>{inputQuality === "PASS" ? "Ready for assessment" : inputQuality === "RETRY" ? "Try your input again" : "Check your input"}</strong><small>{inputQuality === "PASS" ? "A clear note was detected with enough confidence for an Accuracy rating." : "Play one clear note before starting an assessable Attempt."}</small><label className={styles.telemetry}><input type="checkbox" checked={telemetryConsent} onChange={(event) => setTelemetryConsent(event.target.checked)}/> Help improve the pilot with private, structured usage events</label></div><button onClick={() => void input.current?.start()}>Check input</button></section>
     {assessabilityReason && <p className={styles.unassessable}>This passage is not assessable. {assessabilityReason}</p>}
-    {(review || saveMessage) && <section className={styles.review} aria-live="polite"><b>{review?.saved ? "SAVED ATTEMPT" : "ATTEMPT REVIEW"}</b>{review && <><strong>{review.accuracyPercent}% Accuracy rating</strong><span>Pitch {review.pitchCorrect} / {review.total} · Onset timing {review.onsetTimingCorrect} / {review.total} · Input confidence {review.inputConfidencePercent}%</span>{guidance && <><small className={styles.baseline}>{guidance.comparison ? guidance.comparison.message : "Baseline retained quietly for your next like-for-like Attempt."}</small><strong>Weak point: {guidance.weakPoint.observed}</strong><span>{guidance.intervention.label}: {guidance.intervention.action}</span><div className={styles.corrections}><button onClick={() => submitCorrection("DIAGNOSIS")}>Diagnosis wasn’t helpful</button><button onClick={() => submitCorrection("INTERVENTION")}>Intervention wasn’t helpful</button></div>{correctionMessage && <small>{correctionMessage}</small>}</>}</>}{saveMessage && <small>{saveMessage}</small>}</section>}
+    {(review || saveMessage) && <section className={styles.review} aria-live="polite"><b>{review?.saved ? "SAVED ATTEMPT" : "ATTEMPT REVIEW"}</b>{review && <><strong>{review.accuracyPercent}% Accuracy rating</strong><span>Pitch {review.pitchCorrect} / {review.total} · Onset timing {review.onsetTimingCorrect} / {review.total} · Input confidence {review.inputConfidencePercent}%</span>{guidance && <><small className={styles.baseline}>{guidance.comparison ? guidance.comparison.message : "Baseline retained quietly for your next like-for-like Attempt."}</small><strong>Weak point: {guidance.weakPoint.observed}</strong><span>{guidance.intervention.label}: {guidance.intervention.action}</span><div className={styles.corrections}><button onClick={() => submitCorrection("DIAGNOSIS")}>Diagnosis wasn’t helpful</button><button onClick={() => submitCorrection("INTERVENTION")}>Intervention wasn’t helpful</button><button onClick={returnToPassage}>Practice again</button></div>{correctionMessage && <small>{correctionMessage}</small>}</>}</>}{saveMessage && <small>{saveMessage}</small>}</section>}
     <AudioInput ref={input} onPitchDetected={onPitch} targetMidi={current?.pitches[0] ?? null}/>
   </section>;
 }

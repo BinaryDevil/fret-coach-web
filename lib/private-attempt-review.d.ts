@@ -1,0 +1,6 @@
+import type { PracticeAttempt, PilotTelemetryEventType } from "./fretcoach-api";
+
+export type PrivateAttemptReview = { baselineId: string | null; comparison: { baselineAccuracyPercent: number; accuracyChangePercent: number; message: string } | null; weakPoint: { kind: "PITCH" | "TIMING" | "MISSING" | "CONSISTENCY"; eventId: string | null; observed: string }; intervention: { label: "Intervention hypothesis"; action: string } };
+export function reviewPrivateAttemptHistory(input: { baselineAttemptId: string | null; items: PracticeAttempt[] }): PrivateAttemptReview | null;
+export function correctionPayload(input: { subject: "DIAGNOSIS" | "INTERVENTION"; isHelpful: boolean; note?: string }): { subject: "DIAGNOSIS" | "INTERVENTION"; isHelpful: boolean; note?: string };
+export function telemetryPayload(input: { consent: boolean; scoreImportId: string; attemptId?: string; eventType: PilotTelemetryEventType; outcome?: string; reason?: string; trackId?: string; passageStartMeasure?: number; passageEndMeasure?: number }): { consent: true; scoreImportId: string; attemptId?: string; eventType: PilotTelemetryEventType; outcome?: string; reason?: string; trackId?: string; passageStartMeasure?: number; passageEndMeasure?: number } | null;
