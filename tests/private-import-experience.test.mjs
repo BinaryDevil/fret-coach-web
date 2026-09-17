@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 import { evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
+import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
 
 const source = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -69,4 +70,29 @@ test("private passage behavior selects, checks input, assesses, saves, and reloa
   const unassessable = selectPrivatePassage({ allEvents: [{ ...allEvents[0], pitches: [40, 44] }], from: 1, to: 1, scoreRevision: "revision-1" });
   assert.equal(unassessable.assessable, false);
   assert.match(unassessable.reason, /not assessable/);
+});
+
+test("the first reliable private Attempt becomes a quiet Baseline", () => {
+  const attempt = { id: "baseline", scoreRevision: "revision-1", bpm: 90, totalTargetEvents: 2, correctCount: 1, wrongPitchCount: 1, missingCount: 0, accuracyPercent: 50, noteResults: [{ timelineEventId: "first", eventIndex: 0, outcome: "WRONG_PITCH" }, { timelineEventId: "second", eventIndex: 1, outcome: "CORRECT" }] };
+
+  assert.deepEqual(reviewPrivateAttemptHistory({ baselineAttemptId: "baseline", items: [attempt] }), {
+    baselineId: "baseline",
+    comparison: null,
+    weakPoint: { kind: "PITCH", eventId: "first", observed: "Wrong pitch on 1 of 2 notes." },
+    intervention: { label: "Intervention hypothesis", action: "Slow the passage and prioritize clean fretting on the weak note." },
+  });
+});
+
+test("later like-for-like private Attempts show meaningful change from the Baseline", () => {
+  const baseline = { id: "baseline", scoreRevision: "revision-1", bpm: 90, totalTargetEvents: 2, correctCount: 1, wrongPitchCount: 1, missingCount: 0, accuracyPercent: 50, noteResults: [] };
+  const later = { id: "later", scoreRevision: "revision-1", bpm: 90, totalTargetEvents: 2, correctCount: 2, wrongPitchCount: 0, missingCount: 0, accuracyPercent: 100, noteResults: [] };
+
+  assert.deepEqual(reviewPrivateAttemptHistory({ baselineAttemptId: "baseline", items: [baseline, later] }).comparison, { baselineAccuracyPercent: 50, accuracyChangePercent: 50, message: "50 points above your Baseline." });
+  assert.equal(reviewPrivateAttemptHistory({ baselineAttemptId: "baseline", items: [baseline, { ...later, bpm: 100 }] }).comparison, null);
+});
+
+test("correction feedback is separate from Attempt evidence and telemetry requires consent", () => {
+  assert.deepEqual(correctionPayload({ subject: "INTERVENTION", isHelpful: false, note: "This did not match the problem." }), { subject: "INTERVENTION", isHelpful: false, note: "This did not match the problem." });
+  assert.equal(telemetryPayload({ consent: false, scoreImportId: "private-song", eventType: "REVIEW_SHOWN" }), null);
+  assert.deepEqual(telemetryPayload({ consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "REVIEW_SHOWN", trackId: "timeline-track", passageStartMeasure: 1, passageEndMeasure: 1 }), { consent: true, scoreImportId: "private-song", attemptId: "attempt", eventType: "REVIEW_SHOWN", trackId: "timeline-track", passageStartMeasure: 1, passageEndMeasure: 1 });
 });
