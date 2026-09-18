@@ -1,6 +1,7 @@
 import { ScoreNoteEvent } from "./fretcoach-api";
 import { pitchMatch, PitchReading } from "./pitch-detection";
 import { ASSESSMENT_CRITERIA } from "./attempt-evaluation.mjs";
+import { hasPitchChangeAttack } from "./note-attack.mjs";
 
 export const PRACTICE_STRICTNESS = [
   { id: "guided", label: "1 · Guided", centsTolerance: 85, timingToleranceMs: 400 },
@@ -25,7 +26,7 @@ export type LastAcceptedPitch = { eventId: string; midi: number } | null;
  * still require an actual onset, preventing a sustained note scoring repeats.
  */
 export function isNewNoteAttack(reading: PitchReading, eventId: string, previous: LastAcceptedPitch) {
-  return reading.onset || (previous?.eventId !== eventId && (!previous || Math.abs(reading.midi - previous.midi) >= 0.35));
+  return reading.onset || (previous?.eventId !== eventId && hasPitchChangeAttack(reading, previous?.midi));
 }
 
 export function findTargetForReading(events: ScoreNoteEvent[], range: { start: number; end: number }, tick: number, millisecondsPerTick: number, reading: PitchReading, resolved: Record<string, string>) {
