@@ -12,3 +12,20 @@ test("practice controls keep common actions visible and label setup options", as
   assert.match(studio, /Restart target passage/);
   assert.match(studio, /Changes live status only\. It does not change your Accuracy rating\./);
 });
+
+test("both practice players use the development-only input boundary and save guard", async () => {
+  const [source, studio, imported] = await Promise.all([
+    readFile(new URL("../components/performance-input.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/practice-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/imported-song-practice.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(source, /process\.env\.NODE_ENV !== "production"/);
+  assert.match(source, /Development simulator — results are not saved\./);
+  assert.match(source, /simulatedPerformanceReadings/);
+  for (const player of [studio, imported]) {
+    assert.match(player, /<PerformanceInput/);
+    assert.match(player, /captureTimestampToTick/);
+    assert.match(player, /canSavePracticeAttempt/);
+  }
+});

@@ -9,7 +9,9 @@ import { DEFAULT_PRACTICE_STRICTNESS, findTargetForReading, isNewNoteAttack, Las
 import { ASSESSMENT_CRITERIA } from "../lib/attempt-evaluation.mjs";
 import { evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { privatePassageReturnTarget } from "../lib/private-intervention.mjs";
-import { AudioInput, AudioInputHandle } from "./audio-input";
+import { canSavePracticeAttempt, captureTimestampToTick } from "../lib/performance-input.mjs";
+import type { PerformanceInputReading } from "../lib/performance-input-types";
+import { PerformanceInput, PerformanceInputHandle } from "./performance-input";
 import { HomeNavigation } from "./home-navigation";
 import styles from "./practice-studio.module.css";
 
@@ -19,7 +21,7 @@ type NoteState = "pending" | "correct" | "wrong-pitch" | "missing" | "extra-note
 type PassSummary = { assessable: boolean; accuracy: number; correct: number; wrongPitch: number; missing: number; extraNotes: number; total: number; pitchCorrect: number; onsetTimingCorrect: number; inputConfidencePercent: number };
 type InputQuality = "CHECK" | "PASS" | "RETRY" | "PRACTICE_WITHOUT_ASSESSMENT";
 type NoteDiagnostic = { detectedMidi: number; correctedMidi: number; centsOffset: number; octaveShift: number; confidence: number; timingOffsetMs: number };
-type SaveStatus = "saving" | "saved" | "retrying" | "unsaved" | "stale";
+type SaveStatus = "saving" | "saved" | "retrying" | "unsaved" | "stale" | "simulated";
 type PracticeTraceEntry = {
   elapsedMs: number;
   tick: number;
@@ -51,7 +53,7 @@ export function PracticeStudio() {
   const scoreViewElement = useRef<HTMLDivElement>(null);
   const scoreElement = useRef<HTMLDivElement>(null);
   const apiRef = useRef<AlphaApi | null>(null);
-  const inputRef = useRef<AudioInputHandle>(null);
+  const inputRef = useRef<PerformanceInputHandle>(null);
   const clockRef = useRef<AudioContext | null>(null);
   const startRef = useRef(0);
   const elapsedRef = useRef(0);
@@ -67,6 +69,8 @@ export function PracticeStudio() {
   const practiceTraceRef = useRef<PracticeTraceEntry[]>([]);
   const clientRunIdRef = useRef<string | null>(null);
   const attemptStartedAtMsRef = useRef<number | null>(null);
+  const transportStartedAtMsRef = useRef<number | null>(null);
+  const attemptIsSimulatedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retrySaveRef = useRef<(() => void) | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -148,6 +152,7 @@ export function PracticeStudio() {
     const last = selected.at(-1);
     return first && last ? { start: first.index, end: last.index + 1, startTick: first.event.startTick, endTick: last.event.startTick + last.event.durationTicks } : null;
   }, [activeLoop, events]);
+  const assessableEvents = useMemo(() => range ? events.slice(range.start, range.end) : [], [events, range]);
   const activeEvent = events[active];
   const activeState: NoteState = activeEvent ? noteStates[activeEvent.id] ?? "pending" : "pending";
 
@@ -158,6 +163,7 @@ export function PracticeStudio() {
 
   const saveFinalizedAttempt = useCallback((finalStates: Record<string, NoteState>, activeDurationMs: number) => {
     if (!exercise?.score?.revision || !range) return;
+    if (!canSavePracticeAttempt({ isSimulated: attemptIsSimulatedRef.current })) { setSaveStatus("simulated"); setSaveError(""); return; }
     const session = getSession();
     if (!session) return;
     const clientRunId = clientRunIdRef.current ?? crypto.randomUUID();
@@ -300,11 +306,14 @@ export function PracticeStudio() {
 
   const beginAttempt = useCallback((now: number) => {
     startRef.current = now - elapsedRef.current;
+    transportStartedAtMsRef.current = performance.now() - elapsedRef.current;
+    attemptIsSimulatedRef.current = inputRef.current?.isSimulated ?? false;
     loopRef.current = -1;
     if (!clientRunIdRef.current) clientRunIdRef.current = crypto.randomUUID();
     if (!attemptStartedAtMsRef.current) attemptStartedAtMsRef.current = Date.now() - elapsedRef.current;
     playingRef.current = true;
     setPlaying(true);
+    void inputRef.current?.start();
   }, []);
 
   useEffect(() => {
@@ -372,12 +381,12 @@ export function PracticeStudio() {
     return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
   }, [bpm, events, finishPass, metronome, playing, range, timeline, updateStates]);
 
-  const handlePitch = useCallback((reading: PitchReading) => {
+  const handlePitch = useCallback((reading: PerformanceInputReading) => {
     setDetectedPitch(reading);
     if (assessmentEnabled) setInputQuality((quality) => reading.confidence >= ASSESSMENT_CRITERIA.minimumInputConfidence ? "PASS" : quality === "CHECK" ? "RETRY" : quality);
     const trace: PracticeTraceEntry = {
       elapsedMs: Math.round(elapsedRef.current),
-      tick: Math.round(currentTickRef.current),
+      tick: Math.round(transportStartedAtMsRef.current === null || !timeline || !range ? currentTickRef.current : captureTimestampToTick({ capturedAtMs: reading.capturedAtMs, transportStartedAtMs: transportStartedAtMsRef.current, startTick: range.startTick, ticksPerQuarter: timeline.ticksPerQuarter, bpm })),
       activeEventIndex: activeIndexRef.current,
       detectedMidi: Math.round(reading.midi * 100) / 100,
       detectedNote: midiToNoteName(reading.midi),
@@ -391,7 +400,9 @@ export function PracticeStudio() {
     };
     if (!playingRef.current || !timeline || !range || reading.confidence < 0.65) { addTrace(); return; }
     const millisecondsPerTick = ticksToMilliseconds(1, timeline.ticksPerQuarter, bpm);
-    const target = findTargetForReading(events, range, currentTickRef.current, millisecondsPerTick, reading, noteStatesRef.current);
+    const readingTick = transportStartedAtMsRef.current === null ? currentTickRef.current : captureTimestampToTick({ capturedAtMs: reading.capturedAtMs, transportStartedAtMs: transportStartedAtMsRef.current, startTick: range.startTick, ticksPerQuarter: timeline.ticksPerQuarter, bpm });
+    trace.tick = Math.round(readingTick);
+    const target = findTargetForReading(events, range, readingTick, millisecondsPerTick, reading, noteStatesRef.current);
     if (!target) { trace.decision = "no-target"; addTrace(); return; }
     const event = events[target.index];
     const match = target.match;
@@ -415,18 +426,17 @@ export function PracticeStudio() {
         centsOffset: Math.round(match.cents),
         octaveShift: match.octaveShift,
         confidence: reading.confidence,
-        timingOffsetMs: Math.round((currentTickRef.current - event.startTick) * millisecondsPerTick),
+        timingOffsetMs: Math.round((readingTick - event.startTick) * millisecondsPerTick),
       };
       return { ...previous, [event.id]: nextState };
     });
   }, [assessmentEnabled, bpm, events, range, timeline, updateStates]);
 
   const play = () => {
-    if (playing || countInBeat) { playingRef.current = false; setPlaying(false); setCountInBeat(0); return; }
+    if (playing || countInBeat) { playingRef.current = false; setPlaying(false); setCountInBeat(0); inputRef.current?.stop(); return; }
     const Constructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (Constructor && !clockRef.current) clockRef.current = new Constructor();
     void clockRef.current?.resume();
-    void inputRef.current?.start();
     setSummary(null);
     lastScoredPitchRef.current = null;
     const now = (clockRef.current?.currentTime ?? performance.now() / 1000) * 1000;
@@ -443,6 +453,9 @@ export function PracticeStudio() {
     playingRef.current = false;
     if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     setPlaying(false); setCountInBeat(0); elapsedRef.current = 0; loopRef.current = -1; lastScoredPitchRef.current = null; clientRunIdRef.current = null; attemptStartedAtMsRef.current = null; retrySaveRef.current = null; noteDiagnosticsRef.current = {}; practiceTraceRef.current = []; setSummary(null); setSaveStatus(null); setSaveError(""); setInputQuality("CHECK"); setAssessmentEnabled(true);
+    inputRef.current?.stop();
+    transportStartedAtMsRef.current = null;
+    attemptIsSimulatedRef.current = false;
     if (range) { setActive(range.start); activeIndexRef.current = range.start; currentTickRef.current = range.startTick; }
     updateStates(() => ({}));
   }, [range, updateStates]);
@@ -507,7 +520,7 @@ export function PracticeStudio() {
       {optionsOpen && <section ref={optionsPanelRef} id="practice-options" className={styles.optionsPanel} aria-labelledby="practice-options-title"><div><h2 id="practice-options-title">Practice options</h2><p>Set up this Technique exercise before your next Attempt.</p></div><div className={styles.optionFields}><label><span>Practice assist</span><small>Changes live status only. It does not change your Accuracy rating.</small><select ref={optionsFirstControlRef} value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label><label><span>Count-in</span><small>Choose the beats you hear before an Attempt starts.</small><select value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select></label><label><span>Target passage</span><small>Choose the part of this Technique exercise to practice.</small><select value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select></label></div><button className={styles.restartPassage} type="button" onClick={() => { reset(); setOptionsOpen(false); }}>Restart target passage</button></section>}
     </section>
     {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>{summary.assessable ? "ATTEMPT REVIEW" : "UNASSESSABLE ATTEMPT"}</p><h2 id="practice-result-title">{summary.assessable ? `${summary.accuracy}% Accuracy rating` : "No Accuracy rating"}</h2>{summary.assessable ? <><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed</span><div className={styles.ratingEvidence}><span>Pitch <b>{summary.pitchCorrect} / {summary.total}</b></span><span>Onset timing <b>{summary.onsetTimingCorrect} / {summary.total}</b></span><span>Input confidence <b>{summary.inputConfidencePercent}%</b></span></div><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small></> : <p className={styles.resultAdvice}>Your input was not clear enough for a trustworthy Performance diagnosis. Adjust your input or choose practice without assessment again.</p>}<div><button onClick={reset}>Practice again</button>{summary.assessable && saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}{summary.assessable && <button onClick={downloadDiagnostics}>Download diagnostics</button>}<Link href={returnTarget ? returnTo! : "/library"}>{returnTarget ? "Return to your passage" : "Back to library"}</Link></div></section></div>}
-    <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
+    <PerformanceInput ref={inputRef} events={assessableEvents} ticksPerQuarter={timeline.ticksPerQuarter} bpm={bpm} onReading={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
 }
 
@@ -529,6 +542,7 @@ function saveMessage(status: SaveStatus | null) {
   if (status === "retrying") return "Saving result again…";
   if (status === "saved") return "Saved to history";
   if (status === "unsaved") return "Couldn’t save this result";
+  if (status === "simulated") return "Simulated Attempt — not saved.";
   return "";
 }
 

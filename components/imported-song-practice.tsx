@@ -3,14 +3,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AudioInput, AudioInputHandle } from "./audio-input";
+import { PerformanceInput, PerformanceInputHandle } from "./performance-input";
 import { ApiError, getPrivateAttemptHistory, getSession, ImportedTimeline, ImportedTrack, PilotTelemetryEventType, recordPilotTelemetry, saveAttemptCorrection, savePracticeAttempt } from "../lib/fretcoach-api";
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
 import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
 import { interventionNavigation, privatePassageReturnTarget } from "../lib/private-intervention.mjs";
-import { midiToNoteName, PitchReading } from "../lib/pitch-detection";
+import { midiToNoteName } from "../lib/pitch-detection";
 import { ticksToMilliseconds } from "../lib/practice-evaluation";
+import { canSavePracticeAttempt, captureTimestampToTick } from "../lib/performance-input.mjs";
+import type { PerformanceInputReading } from "../lib/performance-input-types";
 import styles from "./imported-song-practice.module.css";
 
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
@@ -19,15 +21,18 @@ type AttemptReview = { accuracyPercent: number; correct: number; total: number; 
 type ReviewGuidance = NonNullable<ReturnType<typeof reviewPrivateAttemptHistory>>;
 
 export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevision, initialPassage, onActiveBeatChange }: { timeline: ImportedTimeline; track: ImportedTrack | null; scoreImportId: string; scoreRevision?: string; initialPassage?: NonNullable<ReturnType<typeof privatePassageReturnTarget>> | null; onActiveBeatChange?: (beat: number) => void }) {
-  const input = useRef<AudioInputHandle>(null);
+  const input = useRef<PerformanceInputHandle>(null);
   const audio = useRef<AudioContext | null>(null);
   const frame = useRef<number | null>(null);
   const started = useRef(0);
+  const playingRef = useRef(false);
   const currentTick = useRef(0);
   const readings = useRef<Array<{ midi: number; tick: number; confidence: number; onset: boolean }>>([]);
   const previewNodes = useRef<OscillatorNode[]>([]);
   const previewTimer = useRef<number | null>(null);
   const attemptStartedAt = useRef<number | null>(null);
+  const transportStartedAt = useRef<number | null>(null);
+  const attemptIsSimulated = useRef(false);
   const [bpm, setBpm] = useState(timeline.defaultBpm);
   const [active, setActive] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -54,6 +59,9 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   const resetAttempt = useCallback(() => {
     readings.current = [];
     attemptStartedAt.current = null;
+    transportStartedAt.current = null;
+    attemptIsSimulated.current = false;
+    input.current?.stop();
     setActive(0);
     setReview(null);
     setReviewAttemptId(null);
@@ -112,12 +120,14 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   const stop = useCallback(() => {
     if (frame.current) cancelAnimationFrame(frame.current);
     frame.current = null;
+    playingRef.current = false;
     setPlaying(false);
     void input.current?.stop();
   }, []);
 
   const persist = useCallback((assessment: ReturnType<typeof evaluateAttempt>, activeDurationMs: number) => {
     if (!assessment.rating || !track || !scoreRevision) return;
+    if (!canSavePracticeAttempt({ isSimulated: attemptIsSimulated.current })) { setSaveMessage("Simulated Attempt — not saved."); return; }
     const session = getSession();
     if (!session) { setSaveMessage("Sign in again to save this Attempt."); return; }
     const payload = privateAttemptPayload({ assessment, allEvents: all, scoreImportId, trackId: track.sourceTrackId, from, to, scoreRevision, bpm, clientRunId: crypto.randomUUID(), activeDurationMs, startedAt: new Date(attemptStartedAt.current ?? Date.now() - activeDurationMs).toISOString() });
@@ -149,8 +159,11 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     context();
     resetAttempt();
     started.current = performance.now();
+    transportStartedAt.current = started.current;
+    attemptIsSimulated.current = input.current?.isSimulated ?? false;
     attemptStartedAt.current = Date.now();
     currentTick.current = events[0].startTick;
+    playingRef.current = true;
     setPlaying(true);
     void input.current?.start();
     sendTelemetry("ATTEMPT_STARTED");
@@ -185,11 +198,12 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     }));
     previewTimer.current = window.setTimeout(() => { previewNodes.current = []; setPreviewing(false); }, ticksToMilliseconds(endTick - startTick, q, bpm) + 100);
   };
-  const onPitch = (reading: PitchReading) => {
+  const onPitch = (reading: PerformanceInputReading) => {
     if (reading.confidence >= ASSESSMENT_CRITERIA.minimumInputConfidence) { setInputQuality(inputQualityForConfidence(reading.confidence)); if (inputQuality !== "PASS") sendTelemetry("INPUT_QUALITY_OUTCOME", { outcome: "PASS" }); }
     else if (inputQuality === "CHECK") { setInputQuality(inputQualityForConfidence(reading.confidence)); sendTelemetry("INPUT_QUALITY_OUTCOME", { outcome: "RETRY" }); }
-    if (!playing) return;
-    readings.current.push({ midi: reading.midi, tick: currentTick.current, confidence: reading.confidence, onset: reading.onset });
+    if (!playingRef.current) return;
+    const tick = transportStartedAt.current === null ? currentTick.current : captureTimestampToTick({ capturedAtMs: reading.capturedAtMs, transportStartedAtMs: transportStartedAt.current, startTick: events[0]?.startTick ?? 0, ticksPerQuarter: q, bpm });
+    readings.current.push({ midi: reading.midi, tick, confidence: reading.confidence, onset: reading.onset });
   };
   const expected = current?.pitches.map(midiToNoteName).join(" + ") ?? "—";
   const submitCorrection = (subject: "DIAGNOSIS" | "INTERVENTION") => {
@@ -212,6 +226,6 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     <section className={styles.inputQuality} aria-label="Input quality"><div><b>INPUT QUALITY</b><strong>{inputQuality === "PASS" ? "Ready for assessment" : inputQuality === "RETRY" ? "Try your input again" : "Check your input"}</strong><small>{inputQuality === "PASS" ? "A clear note was detected with enough confidence for an Accuracy rating." : "Play one clear note before starting an assessable Attempt."}</small><label className={styles.telemetry}><input type="checkbox" checked={telemetryConsent} onChange={(event) => setTelemetryConsent(event.target.checked)}/> Help improve the pilot with private, structured usage events</label></div><button onClick={() => void input.current?.start()}>Check input</button></section>
     {assessabilityReason && <p className={styles.unassessable}>This passage is not assessable. {assessabilityReason}</p>}
     {(review || saveMessage) && <section className={styles.review} aria-live="polite"><b>{review?.saved ? "SAVED ATTEMPT" : "ATTEMPT REVIEW"}</b>{review && <><strong>{review.accuracyPercent}% Accuracy rating</strong><span>Pitch {review.pitchCorrect} / {review.total} · Onset timing {review.onsetTimingCorrect} / {review.total} · Input confidence {review.inputConfidencePercent}%</span>{guidance && <><small className={styles.baseline}>{guidance.comparison ? guidance.comparison.message : "Baseline retained quietly for your next like-for-like Attempt."}</small><strong>Weak point: {guidance.weakPoint.observed}</strong><span>{guidance.intervention.label}: {guidance.intervention.action}</span>{techniqueNavigation && <Link className={styles.techniqueLink} href={techniqueNavigation.href}>Try {techniqueNavigation.recommendation.title}<small>{techniqueNavigation.recommendation.reason}</small></Link>}<div className={styles.corrections}><button onClick={() => submitCorrection("DIAGNOSIS")}>Diagnosis wasn’t helpful</button><button onClick={() => submitCorrection("INTERVENTION")}>Intervention wasn’t helpful</button><button onClick={returnToPassage}>Practice again</button></div>{correctionMessage && <small>{correctionMessage}</small>}</>}</>}{saveMessage && <small>{saveMessage}</small>}</section>}
-    <AudioInput ref={input} onPitchDetected={onPitch} targetMidi={current?.pitches[0] ?? null}/>
+    <PerformanceInput ref={input} events={events} ticksPerQuarter={q} bpm={bpm} onReading={onPitch} targetMidi={current?.pitches[0] ?? null}/>
   </section>;
 }

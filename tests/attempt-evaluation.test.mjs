@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
+import { canSavePracticeAttempt, captureTimestampToTick, simulatedPerformanceReadings } from "../lib/performance-input.mjs";
 
 const event = (id, midi, startTick) => ({ id, pitches: [midi], startTick, durationTicks: 240, isRest: false });
 const reading = (midi, tick, overrides = {}) => ({ midi, tick, confidence: 0.9, onset: true, ...overrides });
@@ -51,4 +52,22 @@ test("multi-note passages are unassessable under the initial assessment boundary
   assert.equal(result.assessable, false);
   assert.equal(result.rating, null);
   assert.deepEqual(result.events, [{ eventId: "chord", outcome: "UNASSESSED" }]);
+});
+
+test("deterministic simulator fixtures use the same final assessment as real readings", () => {
+  const events = [event("first", 40, 0), event("second", 45, 480)];
+  const toAssessmentReadings = (scenario) => simulatedPerformanceReadings({ events, ticksPerQuarter: 480, bpm: 120, scenario, captureStartedAtMs: 1_000 })
+    .map(({ capturedAtMs, ...reading }) => ({ ...reading, tick: captureTimestampToTick({ capturedAtMs, transportStartedAtMs: 1_000, startTick: 0, ticksPerQuarter: 480, bpm: 120 }) }));
+
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("PERFECT"))).rating.accuracyPercent, 100);
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("WRONG_PITCH"))).events[0].outcome, "WRONG_PITCH");
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("LOW_CONFIDENCE"))).rating, null);
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("MISSED_EVENT"))).events[0].outcome, "MISSING");
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("EARLY_ONSET"))).events[1].outcome, "MISSING");
+  assert.equal(evaluateAttempt(options(events, toAssessmentReadings("LATE_ONSET"))).events[1].outcome, "WRONG_TIMING");
+});
+
+test("simulated Attempts are blocked before the practice-history request", () => {
+  assert.equal(canSavePracticeAttempt({ isSimulated: true }), false);
+  assert.equal(canSavePracticeAttempt({ isSimulated: false }), true);
 });
