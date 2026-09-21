@@ -70,6 +70,9 @@ export function PracticeStudio() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retrySaveRef = useRef<(() => void) | null>(null);
   const frameRef = useRef<number | null>(null);
+  const optionsButtonRef = useRef<HTMLButtonElement>(null);
+  const optionsPanelRef = useRef<HTMLElement>(null);
+  const optionsFirstControlRef = useRef<HTMLSelectElement>(null);
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -88,6 +91,7 @@ export function PracticeStudio() {
   const [saveError, setSaveError] = useState("");
   const [inputQuality, setInputQuality] = useState<InputQuality>("CHECK");
   const [assessmentEnabled, setAssessmentEnabled] = useState(true);
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   const loadExercise = useCallback(() => {
     const session = getSession();
@@ -104,6 +108,20 @@ export function PracticeStudio() {
   useEffect(() => { void loadExercise(); }, [loadExercise]);
 
   useEffect(() => () => { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); }, []);
+
+  useEffect(() => {
+    if (!optionsOpen) return;
+    optionsFirstControlRef.current?.focus();
+    const close = () => { setOptionsOpen(false); optionsButtonRef.current?.focus(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!optionsPanelRef.current?.contains(target) && !optionsButtonRef.current?.contains(target)) close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); document.removeEventListener("pointerdown", onPointerDown); };
+  }, [optionsOpen]);
 
   useEffect(() => {
     const content = exercise?.score?.content;
@@ -468,6 +486,8 @@ export function PracticeStudio() {
   const title = isSpiderExercise ? "1-2-3-4 Spider Exercise" : exercise.title;
   const instructions = isSpiderExercise ? "Start at 60 BPM, and raise the tempo by 5 BPM after each clean pass." : exercise.instructions;
   const loopTitle = isSpiderExercise ? "Full loop" : activeLoop?.title ?? "Full loop";
+  const strictnessLabel = PRACTICE_STRICTNESS.find((option) => option.id === strictness)?.label ?? "Practice assist";
+  const countInLabel = countInBeats ? `${countInBeats}-beat count-in` : "No count-in";
   return <main className={styles.page}>
     <HomeNavigation />
     <div className={styles.practiceContext}><b>{title}</b><small>{instructions}</small></div>
@@ -480,7 +500,12 @@ export function PracticeStudio() {
       <div><p>INPUT QUALITY</p><strong>{inputQuality === "PASS" ? "Ready for assessment" : inputQuality === "RETRY" ? "Try your input again" : inputQuality === "PRACTICE_WITHOUT_ASSESSMENT" ? "Practice without assessment" : "Check your input"}</strong><span>{inputQuality === "PASS" ? "A clear note was detected with enough confidence for an Accuracy rating." : inputQuality === "RETRY" ? "Play a clear note, reduce background sound, or choose a different input." : inputQuality === "PRACTICE_WITHOUT_ASSESSMENT" ? "You can practice, but this Attempt will not receive an Accuracy rating." : "Connect your guitar and play one clear note before starting an assessable Attempt."}</span></div>
       <div><button onClick={() => void inputRef.current?.start()}>Check input</button><button className={styles.withoutAssessment} onClick={() => { setAssessmentEnabled(false); setInputQuality("PRACTICE_WITHOUT_ASSESSMENT"); }}>Practice without assessment</button></div>
     </section>
-    <section className={styles.metronome} aria-label="Metronome controls"><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/><select aria-label="Scoring strictness" value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select><select aria-label="Count-in beats" value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select><select aria-label="Loop region" value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button className={styles.reset} onClick={reset} aria-label="Restart exercise">↺</button></section>
+    <section className={styles.metronome} aria-label="Practice controls">
+      <div className={styles.transport}><div className={styles.beats} aria-label={`Beat ${isCountingIn ? countInBeat : activeEvent?.beat ?? 1} of 4`}>{[1, 2, 3, 4].map((beat) => <i className={(isCountingIn ? beat === countInBeat : playing && beat === activeEvent?.beat) ? styles.beatActive : ""} key={beat} />)}</div><button className={styles.play} onClick={play} aria-label={playing || isCountingIn ? "Pause practice" : "Start practice"}>{playing || isCountingIn ? "❚❚" : "▶"}</button></div>
+      <div className={styles.tempoControl}><div className={styles.tempo}><button onClick={() => updateBpm(Math.max(exercise.configuration.bpmRange[0], bpm - 1))} aria-label="Decrease BPM">−</button><b>{bpm}<small>BPM</small></b><button onClick={() => updateBpm(Math.min(exercise.configuration.bpmRange[1], bpm + 1))} aria-label="Increase BPM">+</button></div><label className={styles.tempoSlider}><span>Tempo</span><input type="range" aria-label="Tempo in BPM" min={exercise.configuration.bpmRange[0]} max={exercise.configuration.bpmRange[1]} value={bpm} onChange={(event) => updateBpm(Number(event.target.value))}/></label></div>
+      <div className={styles.controlActions}>{playing && <button className={styles.finish} onClick={() => finishPass(elapsedRef.current)}>Finish & review</button>}<button ref={optionsButtonRef} className={styles.optionsButton} type="button" aria-expanded={optionsOpen} aria-controls="practice-options" onClick={() => setOptionsOpen((open) => !open)}>Practice options <span aria-hidden="true">{optionsOpen ? "⌃" : "⌄"}</span><small>{strictnessLabel} · {countInLabel} · {loopTitle}</small></button></div>
+      {optionsOpen && <section ref={optionsPanelRef} id="practice-options" className={styles.optionsPanel} aria-labelledby="practice-options-title"><div><h2 id="practice-options-title">Practice options</h2><p>Set up this Technique exercise before your next Attempt.</p></div><div className={styles.optionFields}><label><span>Practice assist</span><small>Changes live status only. It does not change your Accuracy rating.</small><select ref={optionsFirstControlRef} value={strictness} onChange={(event) => setStrictness(event.target.value as PracticeStrictnessId)}>{PRACTICE_STRICTNESS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label><label><span>Count-in</span><small>Choose the beats you hear before an Attempt starts.</small><select value={countInBeats} onChange={(event) => setCountInBeats(Number(event.target.value))}><option value={0}>No count-in</option><option value={2}>2-beat count-in</option><option value={4}>4-beat count-in</option></select></label><label><span>Target passage</span><small>Choose the part of this Technique exercise to practice.</small><select value={loopId} onChange={(event) => { setLoopId(event.target.value); reset(); }}>{exercise.loopRegions.map((region) => <option value={region.id} key={region.id}>{isSpiderExercise ? "Full loop" : region.title} · bars {region.startMeasure}–{region.endMeasure}</option>)}</select></label></div><button className={styles.restartPassage} type="button" onClick={() => { reset(); setOptionsOpen(false); }}>Restart target passage</button></section>}
+    </section>
     {summary && <div className={styles.resultOverlay} role="presentation"><section className={styles.resultModal} role="dialog" aria-modal="true" aria-labelledby="practice-result-title"><p>{summary.assessable ? "ATTEMPT REVIEW" : "UNASSESSABLE ATTEMPT"}</p><h2 id="practice-result-title">{summary.assessable ? `${summary.accuracy}% Accuracy rating` : "No Accuracy rating"}</h2>{summary.assessable ? <><span className={styles.resultCounts}>{summary.correct} / {summary.total} correct · {summary.wrongPitch} wrong pitch · {summary.missing} missed</span><div className={styles.ratingEvidence}><span>Pitch <b>{summary.pitchCorrect} / {summary.total}</b></span><span>Onset timing <b>{summary.onsetTimingCorrect} / {summary.total}</b></span><span>Input confidence <b>{summary.inputConfidencePercent}%</b></span></div><p className={styles.resultAdvice}>{resultAdvice(summary)}</p><small className={styles.saveStatus}>{saveMessage(saveStatus)}{saveError ? ` ${saveError}` : ""}</small></> : <p className={styles.resultAdvice}>Your input was not clear enough for a trustworthy Performance diagnosis. Adjust your input or choose practice without assessment again.</p>}<div><button onClick={reset}>Practice again</button>{summary.assessable && saveStatus === "unsaved" && <button onClick={() => retrySaveRef.current?.()}>Retry save</button>}{summary.assessable && <button onClick={downloadDiagnostics}>Download diagnostics</button>}<Link href={returnTarget ? returnTo! : "/library"}>{returnTarget ? "Return to your passage" : "Back to library"}</Link></div></section></div>}
     <AudioInput ref={inputRef} onPitchDetected={handlePitch} targetMidi={activeEvent?.pitches[0] ?? null} />
   </main>;
