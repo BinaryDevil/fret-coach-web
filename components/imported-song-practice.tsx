@@ -6,7 +6,7 @@ import Link from "next/link";
 import { PerformanceInput, PerformanceInputHandle } from "./performance-input";
 import { ApiError, getPrivateAttemptHistory, getSession, ImportedTimeline, ImportedTrack, PilotTelemetryEventType, recordPilotTelemetry, saveAttemptCorrection, savePracticeAttempt } from "../lib/fretcoach-api";
 import { ASSESSMENT_CRITERIA, evaluateAttempt } from "../lib/attempt-evaluation.mjs";
-import { inputQualityForConfidence, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
+import { inputQualityForConfidence, MAX_ASSESSABLE_EVENTS, privateAttemptPayload, reviewFromSavedAttempt, selectPrivatePassage } from "../lib/private-passage-attempt.mjs";
 import { correctionPayload, reviewPrivateAttemptHistory, telemetryPayload } from "../lib/private-attempt-review.mjs";
 import { interventionNavigation, privatePassageReturnTarget } from "../lib/private-intervention.mjs";
 import { midiToNoteName } from "../lib/pitch-detection";
@@ -50,6 +50,10 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   const [from, setFrom] = useState(measures[0] ?? 1);
   const [to, setTo] = useState(measures.at(-1) ?? 1);
   const passage = useMemo(() => selectPrivatePassage({ allEvents: all, from, to, scoreRevision }), [all, from, scoreRevision, to]);
+  const endMeasureOptions = useMemo(() => measures.filter((measure) => measure >= from).map((measure) => ({
+    measure,
+    eventCount: all.filter((event) => event.measure >= from && event.measure <= measure).length,
+  })), [all, from, measures]);
   const techniqueNavigation = guidance && track ? interventionNavigation({ weakPoint: guidance.weakPoint, target: { scoreImportId, trackId: track.sourceTrackId, from, to } }) : null;
   const events: ImportedTimeline["events"] = passage.events;
   const current = events[active];
@@ -80,6 +84,10 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
     setBpm(timeline.defaultBpm);
     resetAttempt();
   }, [initialPassage, measures, resetAttempt, timeline.defaultBpm]);
+  useEffect(() => {
+    const longestAssessableEnd = endMeasureOptions.filter((option) => option.eventCount <= MAX_ASSESSABLE_EVENTS).at(-1)?.measure;
+    if (longestAssessableEnd !== undefined && to > longestAssessableEnd) setTo(longestAssessableEnd);
+  }, [endMeasureOptions, to]);
   useEffect(() => { onActiveBeatChange?.(current?.beat ?? 0); }, [current?.beat, onActiveBeatChange]);
   useEffect(() => () => {
     if (frame.current) cancelAnimationFrame(frame.current);
@@ -222,7 +230,7 @@ export function ImportedSongPractice({ timeline, track, scoreImportId, scoreRevi
   return <section className={styles.player}>
     <div className={styles.status}><span>{playing ? "NOW PLAYING" : previewing ? "PREVIEWING" : "READY"}</span><b>Play {expected}</b><i>{assessable ? `${events.length} assessable notes` : "Not assessable"}</i></div>
     <div className={styles.controls}><button className={styles.play} onClick={() => { if (playing) stop(); else begin(); }} disabled={!playing && (!assessable || inputQuality !== "PASS")}>{playing ? "❚❚" : "▶"}</button><button className={styles.restart} onClick={resetAttempt}>↺ Restart</button><button onClick={() => setBpm((value) => Math.max(40, value - 1))}>−</button><strong>{bpm}<small>BPM</small></strong><button onClick={() => setBpm((value) => Math.min(240, value + 1))}>+</button><input aria-label="Tempo in BPM" type="range" min="40" max="240" value={bpm} onChange={(event) => setBpm(Number(event.target.value))}/><button className={styles.preview} onClick={preview} disabled={previewing}>♫ Hear it</button>{playing && <button className={styles.finish} onClick={finish}>Finish & review</button>}</div>
-    <div className={styles.range}><label>From <select value={from} onChange={(event) => { const value = Number(event.target.value); setFrom(value); if (value > to) setTo(value); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{measures.map((measure) => <option key={measure}>{measure}</option>)}</select></label><label>To <select value={to} onChange={(event) => { setTo(Number(event.target.value)); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{measures.filter((measure) => measure >= from).map((measure) => <option key={measure}>{measure}</option>)}</select></label><span>{active + 1} / {events.length}</span></div>
+    <div className={styles.range}><label>From <select value={from} onChange={(event) => { const value = Number(event.target.value); setFrom(value); setTo(value); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{measures.map((measure) => <option key={measure}>{measure}</option>)}</select></label><label>To <select value={to} onChange={(event) => { setTo(Number(event.target.value)); resetAttempt(); sendTelemetry("PASSAGE_SELECTED"); }}>{endMeasureOptions.map(({ measure, eventCount }) => <option key={measure} value={measure} disabled={eventCount > MAX_ASSESSABLE_EVENTS}>{measure}{eventCount > MAX_ASSESSABLE_EVENTS ? ` — ${eventCount} notes (limit ${MAX_ASSESSABLE_EVENTS})` : ""}</option>)}</select></label><span className={events.length > MAX_ASSESSABLE_EVENTS ? styles.overBudget : ""}>{events.length} / {MAX_ASSESSABLE_EVENTS} notes</span></div>
     <section className={styles.inputQuality} aria-label="Input quality"><div><b>INPUT QUALITY</b><strong>{inputQuality === "PASS" ? "Ready for assessment" : inputQuality === "RETRY" ? "Try your input again" : "Check your input"}</strong><small>{inputQuality === "PASS" ? "A clear note was detected with enough confidence for an Accuracy rating." : "Play one clear note before starting an assessable Attempt."}</small><label className={styles.telemetry}><input type="checkbox" checked={telemetryConsent} onChange={(event) => setTelemetryConsent(event.target.checked)}/> Help improve the pilot with private, structured usage events</label></div><button onClick={() => void input.current?.start()}>Check input</button></section>
     {assessabilityReason && <p className={styles.unassessable}>This passage is not assessable. {assessabilityReason}</p>}
     {(review || saveMessage) && <section className={styles.review} aria-live="polite"><b>{review?.saved ? "SAVED ATTEMPT" : "ATTEMPT REVIEW"}</b>{review && <><strong>{review.accuracyPercent}% Accuracy rating</strong><span>Pitch {review.pitchCorrect} / {review.total} · Onset timing {review.onsetTimingCorrect} / {review.total} · Input confidence {review.inputConfidencePercent}%</span>{guidance && <><small className={styles.baseline}>{guidance.comparison ? guidance.comparison.message : "Baseline retained quietly for your next like-for-like Attempt."}</small><strong>Weak point: {guidance.weakPoint.observed}</strong><span>{guidance.intervention.label}: {guidance.intervention.action}</span>{techniqueNavigation && <Link className={styles.techniqueLink} href={techniqueNavigation.href}>Try {techniqueNavigation.recommendation.title}<small>{techniqueNavigation.recommendation.reason}</small></Link>}<div className={styles.corrections}><button onClick={() => submitCorrection("DIAGNOSIS")}>Diagnosis wasn’t helpful</button><button onClick={() => submitCorrection("INTERVENTION")}>Intervention wasn’t helpful</button><button onClick={returnToPassage}>Practice again</button></div>{correctionMessage && <small>{correctionMessage}</small>}</>}</>}{saveMessage && <small>{saveMessage}</small>}</section>}

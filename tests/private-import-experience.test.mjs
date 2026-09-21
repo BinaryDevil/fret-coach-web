@@ -73,6 +73,13 @@ test("private passage behavior selects, checks input, assesses, saves, and reloa
   assert.match(unassessable.reason, /not assessable/);
 });
 
+test("passage assessment retains the 32-note boundary used by the range picker", () => {
+  const allEvents = Array.from({ length: 33 }, (_, index) => ({ id: `note-${index}`, measure: index < 16 ? 1 : 2, pitches: [40], startTick: index * 120, durationTicks: 120, isRest: false }));
+
+  assert.equal(selectPrivatePassage({ allEvents, from: 1, to: 1, scoreRevision: "revision-1" }).assessable, true);
+  assert.equal(selectPrivatePassage({ allEvents, from: 1, to: 2, scoreRevision: "revision-1" }).assessable, false);
+});
+
 test("the first reliable private Attempt becomes a quiet Baseline", () => {
   const attempt = { id: "baseline", scoreRevision: "revision-1", bpm: 90, totalTargetEvents: 2, correctCount: 1, wrongPitchCount: 1, missingCount: 0, accuracyPercent: 50, noteResults: [{ timelineEventId: "first", eventIndex: 0, outcome: "WRONG_PITCH" }, { timelineEventId: "second", eventIndex: 1, outcome: "CORRECT" }] };
 

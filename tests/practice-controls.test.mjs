@@ -37,3 +37,12 @@ test("practice without assessment can be turned back on and reviews do not offer
   assert.match(studio, /Use Accuracy rating/);
   assert.doesNotMatch(studio, /Download diagnostics/);
 });
+
+test("player-selected notation exposes and enforces the passage note budget", async () => {
+  const imported = await readFile(new URL("../components/imported-song-practice.tsx", import.meta.url), "utf8");
+
+  assert.match(imported, /MAX_ASSESSABLE_EVENTS/);
+  assert.match(imported, /notes \(limit \$\{MAX_ASSESSABLE_EVENTS\}\)/);
+  assert.match(imported, /disabled=\{eventCount > MAX_ASSESSABLE_EVENTS\}/);
+  assert.match(imported, /longestAssessableEnd/);
+});
