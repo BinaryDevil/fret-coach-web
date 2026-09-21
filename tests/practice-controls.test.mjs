@@ -29,3 +29,11 @@ test("both practice players use the development-only input boundary and save gua
     assert.match(player, /canSavePracticeAttempt/);
   }
 });
+
+test("practice without assessment can be turned back on and reviews do not offer diagnostics downloads", async () => {
+  const studio = await readFile(new URL("../components/practice-studio.tsx", import.meta.url), "utf8");
+
+  assert.match(studio, /setAssessmentEnabled\(true\)/);
+  assert.match(studio, /Use Accuracy rating/);
+  assert.doesNotMatch(studio, /Download diagnostics/);
+});
