@@ -1,5 +1,7 @@
 # FretCoach
 
+This file is the durable domain glossary. For current capabilities, challenges and unfinished work, read [project status](docs/project-status.md). For implementation relationships, read [project context](docs/project-context.md).
+
 FretCoach helps returning self-taught guitarists re-establish a focused, effective practice habit and overcome specific playing weak points.
 
 ## Audience

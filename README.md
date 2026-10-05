@@ -1,34 +1,36 @@
 # FretCoach Web
 
-The browser application for FretCoach: guided guitar practice, real-time feedback, and progress reports.
+FretCoach helps returning self-taught guitarists improve difficult passages of their own songs through private, evidence-based practice.
 
-## Stack
+This is the Next.js/React browser app. The companion fret-coach-api repository owns backend contracts and persistence. alphaTab renders notation; browser audio analysis stays on-device.
 
-- Next.js-compatible React with TypeScript
-- Vite / vinext for local development and Cloudflare-compatible builds
-- Tailwind CSS
+## Documentation
 
-## Start developing
+- [Project status](docs/project-status.md): capabilities, current challenge, unfinished work and verification gaps.
+- [Project context](docs/project-context.md): product scope and architecture.
+- [Domain vocabulary](CONTEXT.md): durable product terms.
+- [Development](docs/development.md): local setup, simulation and checks.
+- [Decisions](docs/adr/): privacy and assessment.
+- [Agent instructions](AGENTS.md): contribution rules; CLAUDE.md links to the same file.
 
-```bash
+## Start locally
+
+Use the Node version required by package.json (currently 22.13 or later).
+
+```sh
 npm install
 cp .env.example .env.local
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_API_URL` to the deployed or local URL of the companion `fretcoach-api` service.
+Set NEXT_PUBLIC_API_URL to the companion API base URL including /api/v1. Without an override it uses http://localhost:3001/api/v1. Starting the web app does not start the API.
 
-## Planned application areas
+## Validation
 
-- `/practice`: real-time exercise player, audio input and pitch feedback
-- `/library`: technique exercise catalogue
-- `/songs`: full-song upload and assessment workflow
-- `/progress`: session reports and improvement trends
-
-## Quality checks
-
-```bash
-npm run build
+```sh
 npm run lint
+npx tsc --noEmit --incremental false
 npm test
 ```
+
+The test command builds first. See development notes for focused checks and the previously observed build hang.
